@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 import urllib.request
 import zipfile
 from datetime import UTC, datetime
@@ -46,6 +47,7 @@ def land(cfg: Config, month: str, force: bool = False) -> Path:
     url = month_url(month)
     tmp = path.with_suffix(".part")
     log.info("landing %s: downloading %s", month, url)
+    started = time.perf_counter()
     req = urllib.request.Request(url, headers={"User-Agent": "open-lakehouse/0.1"})
     with urllib.request.urlopen(req, timeout=300) as resp, tmp.open("wb") as out:
         while chunk := resp.read(1 << 20):
@@ -54,17 +56,18 @@ def land(cfg: Config, month: str, force: bool = False) -> Path:
         tmp.unlink()
         raise RuntimeError(f"{url} did not return a zip; is {month} published yet?")
     tmp.replace(path)
-    write_manifest(path, url)
+    write_manifest(path, url, seconds=round(time.perf_counter() - started, 1))
     return path
 
 
-def write_manifest(path: Path, url: str) -> dict:
+def write_manifest(path: Path, url: str, seconds: float | None = None) -> dict:
     manifest = {
         "file": path.name,
         "url": url,
         "bytes": path.stat().st_size,
         "sha256": sha256(path),
         "landed_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "download_seconds": seconds,
     }
     path.with_suffix(".json").write_text(json.dumps(manifest, indent=2))
     return manifest

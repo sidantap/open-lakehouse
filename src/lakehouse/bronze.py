@@ -105,7 +105,12 @@ def load_bronze(cat: Catalog, contract: Contract, month: str, zip_path: Path) ->
     table.overwrite(
         conform(raw, table),
         overwrite_filter=EqualTo("_source_month", month),
-        snapshot_properties={"source_month": month, "batch_id": batch_id, "rows": str(n), "layer": "bronze"},
+        snapshot_properties={
+            "source_month": month,
+            "batch_id": batch_id,
+            "rows": str(n),
+            "layer": "bronze",
+        },
     )
     snap = table.refresh().current_snapshot()
     log.info("bronze %s: %s rows, batch %s, snapshot %s", month, n, batch_id, snap.snapshot_id)

@@ -11,7 +11,7 @@ asset checks next to the data they describe.
 
 import dagster as dg
 
-from . import bronze, gold, landing, silver
+from . import audit, bronze, gold, landing, silver
 from .catalog import get_catalog
 from .config import Config
 from .contract import load_contract
@@ -38,7 +38,9 @@ class Lakehouse(dg.ConfigurableResource):
     description="The month's zip from BTS, downloaded once and kept unchanged.",
 )
 def ontime_zip(context: dg.AssetExecutionContext, lakehouse: Lakehouse) -> dg.MaterializeResult:
-    path = landing.land(lakehouse.config(), context.partition_key[:7])
+    cfg = lakehouse.config()
+    with audit.stage(get_catalog(cfg), context.run_id, "landing", context.partition_key[:7]):
+        path = landing.land(cfg, context.partition_key[:7])
     return dg.MaterializeResult(metadata={"path": str(path), "bytes": path.stat().st_size})
 
 
@@ -53,7 +55,10 @@ def ontime_zip(context: dg.AssetExecutionContext, lakehouse: Lakehouse) -> dg.Ma
 def bronze_flights(context: dg.AssetExecutionContext, lakehouse: Lakehouse) -> dg.MaterializeResult:
     month = context.partition_key[:7]
     cfg = lakehouse.config()
-    result = bronze.load_bronze(get_catalog(cfg), load_contract(), month, landing.landing_path(cfg, month))
+    cat = get_catalog(cfg)
+    with audit.stage(cat, context.run_id, "bronze", month) as rec:
+        result = bronze.load_bronze(cat, load_contract(), month, landing.landing_path(cfg, month))
+        rec.update(rows_out=result.rows, snapshot_id=result.snapshot_id)
     return dg.MaterializeResult(
         metadata={
             "rows": result.rows,
@@ -86,7 +91,16 @@ def bronze_flights(context: dg.AssetExecutionContext, lakehouse: Lakehouse) -> d
 )
 def silver_flights(context: dg.AssetExecutionContext, lakehouse: Lakehouse):
     contract = load_contract()
-    r = silver.load_silver(get_catalog(lakehouse.config()), contract, context.partition_key[:7])
+    cat = get_catalog(lakehouse.config())
+    with audit.stage(cat, context.run_id, "silver", context.partition_key[:7]) as rec:
+        r = silver.load_silver(cat, contract, context.partition_key[:7])
+        rec.update(
+            rows_in=r.bronze_rows,
+            rows_out=r.silver_rows,
+            rows_quarantined=r.quarantined_rows,
+            snapshot_id=r.snapshot_id,
+            detail=f"contract v{contract.version}",
+        )
     yield dg.MaterializeResult(
         metadata={
             "bronze_rows": r.bronze_rows,
@@ -126,7 +140,13 @@ GOLD_SPECS = [
 )
 def gold_models(context: dg.AssetExecutionContext, lakehouse: Lakehouse):
     selected = [key.path[-1] for key in context.selected_asset_keys]
-    result = gold.build_gold(get_catalog(lakehouse.config()), only=selected)
+    cat = get_catalog(lakehouse.config())
+    with audit.stage(cat, context.run_id, "gold") as rec:
+        result = gold.build_gold(cat, only=selected)
+        rec.update(
+            rows_out=result.rows.get("fact_flight"),
+            detail=", ".join(f"{k}={v}" for k, v in result.rows.items()),
+        )
     for name, rows in result.rows.items():
         yield dg.MaterializeResult(asset_key=["gold", name], metadata={"rows": rows})
     if "fact_flight" in result.rows:  # build_gold raises if the counts differ

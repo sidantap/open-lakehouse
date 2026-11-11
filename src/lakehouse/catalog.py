@@ -17,7 +17,7 @@ from pyiceberg.transforms import Transform
 
 from .config import Config
 
-NAMESPACES = ("bronze", "silver", "gold")
+NAMESPACES = ("bronze", "silver", "gold", "ops")
 Partition = tuple[str, Transform, str]  # (source column, transform, partition field name)
 
 

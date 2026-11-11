@@ -1,24 +1,27 @@
-"""A one-page static report built from the gold marts (no server, no external libraries).
+"""The flight operations report: a static, multi-page HTML report built from the gold layer.
 
   lakehouse report --out site   ->   site/index.html
 
-The page embeds the numbers as JSON and draws the charts as inline SVG in the browser.
+The report ships the additive gold cubes (rpt_*) as compact JSON and does all filtering and
+re-totaling in the browser, the way a BI tool works off an extract. The Data Operations page is
+built from Iceberg metadata (snapshots, data files) and the landing manifests.
 """
 
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
 import duckdb
 from pyiceberg.catalog import Catalog
 
-from . import bronze, silver
-from .catalog import register
+from . import audit, bronze, silver
+from .catalog import all_tables, register
 from .contract import load_contract
 
-TOP_AIRPORTS = 12
+TOP_ROUTES = 200
 
 
 def _rows(con: duckdb.DuckDBPyConnection, sql: str) -> list[dict]:
@@ -27,127 +30,218 @@ def _rows(con: duckdb.DuckDBPyConnection, sql: str) -> list[dict]:
     return [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
 
 
-def collect(cat: Catalog) -> dict:
+def _cube(con: duckdb.DuckDBPyConnection, sql: str) -> dict:
+    """A table as {columns, rows} with rows as arrays: about a third of the size of a list of dicts."""
+    cur = con.execute(sql)
+    return {"columns": [d[0] for d in cur.description], "rows": [list(r) for r in cur.fetchall()]}
+
+
+def _snapshot_log(cat: Catalog) -> tuple[list[dict], list[dict]]:
+    log, inventory = [], []
+    for ident in all_tables(cat):
+        t = cat.load_table(ident)
+        snaps = t.snapshots()
+        for s in snaps:
+            p = s.summary.additional_properties
+            log.append(
+                {
+                    "table": ident,
+                    "snapshot_id": str(s.snapshot_id),
+                    "committed_at": datetime.fromtimestamp(s.timestamp_ms / 1000, UTC).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                    "operation": s.summary.operation.value,
+                    "source_month": p.get("source_month"),
+                    "added": int(p.get("added-records", 0)),
+                    "deleted": int(p.get("deleted-records", 0)),
+                    "total": int(p.get("total-records", 0)),
+                    "batch_id": p.get("batch_id"),
+                    "contract_version": p.get("contract_version"),
+                }
+            )
+        files = t.inspect.files().select(["file_size_in_bytes"]).to_pylist()
+        current = t.current_snapshot()
+        inventory.append(
+            {
+                "table": ident,
+                "layer": ident.split(".")[0],
+                "rows": int(current.summary.additional_properties.get("total-records", 0)) if current else 0,
+                "snapshots": len(snaps),
+                "data_files": len(files),
+                "bytes": sum(f["file_size_in_bytes"] for f in files),
+                "partitioning": ", ".join(
+                    f"{f.transform}({t.schema().find_field(f.source_id).name})" for f in t.spec().fields
+                )
+                or "none",
+                "columns": len(t.schema().fields),
+                "updated_at": datetime.fromtimestamp(current.timestamp_ms / 1000, UTC).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
+                if current
+                else None,
+            }
+        )
+    log.sort(key=lambda r: (r["committed_at"], r["table"]), reverse=True)
+    return log, inventory
+
+
+def _audit(cat: Catalog) -> list[dict]:
+    if not cat.table_exists(audit.TABLE):
+        return []
+    rows = cat.load_table(audit.TABLE).scan().to_arrow().to_pylist()
+    for r in rows:
+        for k in ("started_at", "finished_at"):
+            r[k] = r[k].strftime("%Y-%m-%d %H:%M:%S") if r[k] else None
+    return rows
+
+
+def _manifests(landing: Path | None) -> dict[str, dict]:
+    if not landing or not landing.exists():
+        return {}
+    return {
+        m.stem.removeprefix("ontime_"): json.loads(m.read_text())
+        for m in sorted(landing.glob("ontime_*.json"))
+    }
+
+
+def collect(cat: Catalog, landing: Path | None = None) -> dict:
+    contract = load_contract()
     with duckdb.connect() as con:
         register(
             con,
             cat,
             [
-                "gold.mart_carrier_month",
-                "gold.mart_route_month",
-                "gold.mart_airport_hour",
+                "gold.rpt_flight_summary",
+                "gold.rpt_departure_hour",
+                "gold.rpt_route_summary",
+                "gold.dim_carrier",
+                "gold.dim_airport",
+                "gold.fact_flight",
                 silver.QUARANTINE,
             ],
         )
-        # bronze row counts per month, without scanning 100+ string columns: read only one column
-        bt = cat.load_table(bronze.TABLE).scan(selected_fields=("_source_month",)).to_arrow()
-        con.register("bronze_months", bt)
+        con.register(
+            "bronze_months", cat.load_table(bronze.TABLE).scan(selected_fields=("_source_month",)).to_arrow()
+        )
 
-        totals = _rows(
-            con,
-            """
-            SELECT sum(scheduled)::BIGINT AS flights,
-                   sum(on_time) / sum(scheduled - cancelled - diverted) AS on_time_rate,
-                   sum(cancelled) / sum(scheduled) AS cancel_rate, min(year_month) AS first_month,
-                   max(year_month) AS last_month, count(DISTINCT carrier_code) AS carriers
-            FROM gold_mart_carrier_month""",
-        )[0]
-        carriers = _rows(
-            con,
-            """
-            SELECT carrier_code, carrier_name, sum(scheduled)::BIGINT AS flights,
-                   round(sum(on_time) / sum(scheduled - cancelled - diverted), 4) AS on_time_rate,
-                   round(sum(cancelled) / sum(scheduled), 4) AS cancel_rate
-            FROM gold_mart_carrier_month GROUP BY ALL ORDER BY on_time_rate DESC""",
-        )
-        months = _rows(
-            con,
-            """
-            SELECT year_month, sum(scheduled)::BIGINT AS flights,
-                   round(sum(on_time) / sum(scheduled - cancelled - diverted), 4) AS on_time_rate,
-                   round(sum(cancelled) / sum(scheduled), 4) AS cancel_rate
-            FROM gold_mart_carrier_month GROUP BY 1 ORDER BY 1""",
-        )
-        causes = _rows(
-            con,
-            """
-            UNPIVOT (SELECT sum(late_aircraft_delay_min)::BIGINT AS "Late-arriving aircraft",
-                            sum(carrier_delay_min)::BIGINT AS "Carrier",
-                            sum(nas_delay_min)::BIGINT AS "National Air System",
-                            sum(weather_delay_min)::BIGINT AS "Weather",
-                            sum(security_delay_min)::BIGINT AS "Security"
-                     FROM gold_mart_carrier_month)
-            ON COLUMNS(*) INTO NAME cause VALUE minutes ORDER BY minutes DESC""",
-        )
-        top = [
-            r["origin"]
-            for r in _rows(
-                con,
-                f"""
-            SELECT origin, sum(scheduled) n FROM gold_mart_airport_hour GROUP BY 1 ORDER BY n DESC
-            LIMIT {TOP_AIRPORTS}""",
-            )
-        ]
-        heat = _rows(
+        summary = _cube(con, "SELECT * FROM gold_rpt_flight_summary")
+        hours = _cube(con, "SELECT * FROM gold_rpt_departure_hour")
+        routes = _cube(
             con,
             f"""
-            SELECT origin, any_value(origin_city) AS city, hour, scheduled, dep_delayed_rate
-            FROM gold_mart_airport_hour
-            WHERE origin IN ({", ".join(repr(a) for a in top)}) AND hour BETWEEN 5 AND 23
-            GROUP BY ALL ORDER BY origin, hour""",
+            WITH top AS (SELECT origin, dest FROM gold_rpt_route_summary GROUP BY ALL
+                         ORDER BY sum(scheduled) DESC LIMIT {TOP_ROUTES})
+            SELECT r.* FROM gold_rpt_route_summary r JOIN top USING (origin, dest)""",
         )
-        routes = _rows(
+        carriers = _rows(
+            con, "SELECT carrier_code, carrier_name, carrier_group FROM gold_dim_carrier ORDER BY 1"
+        )
+        airports = _rows(
             con,
             """
-            SELECT origin, dest, origin_city, dest_city, sum(scheduled)::BIGINT AS flights,
-                   round(sum(on_time_rate * scheduled) / sum(scheduled), 4) AS on_time_rate,
-                   round(sum(cancel_rate * scheduled) / sum(scheduled), 4) AS cancel_rate
-            FROM gold_mart_route_month GROUP BY ALL ORDER BY flights DESC LIMIT 12""",
+            SELECT airport_code, any_value(airport_name) AS airport_name, any_value(city_name) AS city,
+                   any_value(state_code) AS state, any_value(state_name) AS state_name,
+                   any_value(latitude) AS lat, any_value(longitude) AS lon
+            FROM gold_dim_airport WHERE is_current GROUP BY 1 ORDER BY 1""",
         )
-        quality = _rows(
+        recon = _rows(
             con,
             """
-            SELECT b._source_month AS month, count(*) AS bronze, coalesce(any_value(q.n), 0) AS quarantined
-            FROM bronze_months b
+            SELECT b._source_month AS month, b.n AS bronze_rows, coalesce(q.n, 0) AS quarantined_rows,
+                   coalesce(f.n, 0) AS fact_rows
+            FROM (SELECT _source_month, count(*) n FROM bronze_months GROUP BY 1) b
             LEFT JOIN (SELECT _source_month, count(*) n FROM silver_flights_quarantine GROUP BY 1) q
               USING (_source_month)
-            GROUP BY 1 ORDER BY 1""",
+            LEFT JOIN (SELECT _source_month, count(*) n FROM gold_fact_flight GROUP BY 1) f
+              USING (_source_month)
+            ORDER BY 1""",
         )
-        examples = _rows(
+        quarantine = _rows(
             con,
             """
-            SELECT _source_month AS month, _row_number AS row_number, violations, raw_record
-            FROM silver_flights_quarantine ORDER BY _source_month, _row_number LIMIT 5""",
+            SELECT _source_month AS month, _row_number AS row_number, _batch_id AS batch_id,
+                   violations, raw_record, contract_version
+            FROM silver_flights_quarantine ORDER BY 1, 2 LIMIT 200""",
         )
 
-    contract = load_contract()
-    for e in examples:
-        e["raw_record"] = json.loads(e["raw_record"])
-        e["violations"] = list(e["violations"])
+    failures = Counter(v for q in quarantine for v in q["violations"])
+    checks = [
+        {"check": name, "kind": name.split(":")[0], "failures": failures.get(name, 0)}
+        for name, _ in contract.all_checks()
+    ]
+    checks.append({"check": "duplicate_key", "kind": "key", "failures": failures.get("duplicate_key", 0)})
+    for q in quarantine:
+        q["violations"] = list(q["violations"])
+        q["raw_record"] = json.loads(q["raw_record"])
+
+    snapshots, inventory = _snapshot_log(cat)
+    manifests = _manifests(landing)
+
+    audit_rows = _audit(cat)
+    # the latest successful run of each stage for each month
+    latest = {}
+    for r in sorted(audit_rows, key=lambda r: r["started_at"]):
+        if r["status"] == "succeeded" and r["source_month"]:
+            latest[(r["source_month"], r["stage"])] = r
+
+    def ms(month: str, stage: str) -> int | None:
+        return (latest.get((month, stage)) or {}).get("duration_ms")
+
+    first = {}  # the data snapshot each bronze load committed, for its batch id
+    for snap in reversed(snapshots):
+        if snap["table"] == bronze.TABLE and snap["added"]:
+            first[snap["source_month"]] = snap
+    loads = []
+    for r in recon:
+        m, s_ = manifests.get(r["month"], {}), latest.get((r["month"], "silver")) or {}
+        loads.append(
+            {
+                "month": r["month"],
+                "file_bytes": m.get("bytes"),
+                "sha256": (m.get("sha256") or "")[:12] or None,
+                "download_seconds": m.get("download_seconds"),
+                "bronze_rows": r["bronze_rows"],
+                "bronze_ms": ms(r["month"], "bronze"),
+                "batch_id": (first.get(r["month"]) or {}).get("batch_id"),
+                "silver_rows": s_.get("rows_out"),
+                "silver_ms": ms(r["month"], "silver"),
+                "quarantined_rows": r["quarantined_rows"],
+                "fact_rows": r["fact_rows"],
+                "loaded_at": str(s_.get("finished_at") or "")[:19] or None,
+            }
+        )
+
     return {
-        "totals": totals,
-        "carriers": carriers,
-        "months": months,
-        "causes": causes,
-        "airports": top,
-        "heat": heat,
-        "routes": routes,
-        "quality": quality,
-        "examples": examples,
-        "contract": {
-            "name": contract.name,
-            "version": contract.version,
-            "checks": len(contract.all_checks()),
-            "budget": contract.max_quarantine_rate,
+        "meta": {
+            "built_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+            "contract": {
+                "name": contract.name,
+                "version": contract.version,
+                "checks": len(checks),
+                "budget": contract.max_quarantine_rate,
+            },
+            "top_routes": TOP_ROUTES,
         },
-        "built": datetime.now(UTC).strftime("%Y-%m-%d"),
+        "carriers": carriers,
+        "airports": airports,
+        "summary": summary,
+        "hours": hours,
+        "routes": routes,
+        "ops": {
+            "runs": sorted(audit_rows, key=lambda r: r["started_at"], reverse=True)[:60],
+            "loads": loads,
+            "snapshots": snapshots[:80],
+            "inventory": inventory,
+            "checks": checks,
+            "quarantine": quarantine,
+        },
     }
 
 
-def build_report(cat: Catalog, out: str | Path) -> Path:
+def build_report(cat: Catalog, out: str | Path, landing: Path | None = None) -> Path:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(collect(cat), default=str, separators=(",", ":"))
+    data = json.dumps(collect(cat, landing), default=str, separators=(",", ":"))
     html = (Path(__file__).parent / "report.html").read_text().replace("/*DATA*/null", data)
     path = out / "index.html"
     path.write_text(html)

@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.8"]
+docs = ["matplotlib>=3.9"]
 
 [project.scripts]
 lakehouse = "lakehouse.cli:main"

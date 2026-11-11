@@ -7,6 +7,8 @@
 -- The dimension is rebuilt from all of silver every run instead of MERGEd incrementally. That keeps
 -- it correct when an older month is loaded late (a backfill can insert a version in the middle of
 -- history), and at a few thousand airports it costs milliseconds.
+--
+-- Names and coordinates come from OurAirports. They're reference data, not tracked over time here.
 
 WITH sightings AS (
   SELECT origin_airport_id AS airport_id, origin AS airport_code, origin_city AS city_name,
@@ -45,12 +47,15 @@ versions AS (
   GROUP BY airport_id, version
 )
 SELECT
-  substr(md5(airport_id || '|' || valid_from), 1, 16) AS airport_sk,
-  airport_id, airport_code, city_name, state_code, state_name,
-  version::INTEGER AS version,
-  valid_from,
-  coalesce(lead(valid_from) OVER w - INTERVAL 1 DAY, DATE '9999-12-31')::DATE AS valid_to,
-  lead(valid_from) OVER w IS NULL AS is_current
-FROM versions
-WINDOW w AS (PARTITION BY airport_id ORDER BY valid_from)
-ORDER BY airport_id, version
+  substr(md5(v.airport_id || '|' || v.valid_from), 1, 16) AS airport_sk,
+  v.airport_id, v.airport_code, v.city_name, v.state_code, v.state_name,
+  -- reference attributes from OurAirports (seeds/airports.csv); NULL when the code isn't found
+  a.airport_name, a.icao_code, a.latitude, a.longitude, a.elevation_ft,
+  v.version::INTEGER AS version,
+  v.valid_from,
+  coalesce(lead(v.valid_from) OVER w - INTERVAL 1 DAY, DATE '9999-12-31')::DATE AS valid_to,
+  lead(v.valid_from) OVER w IS NULL AS is_current
+FROM versions v
+LEFT JOIN airports_seed a USING (airport_code)
+WINDOW w AS (PARTITION BY v.airport_id ORDER BY v.valid_from)
+ORDER BY v.airport_id, v.version

@@ -8,7 +8,7 @@ import shutil
 import duckdb
 import pytest
 
-from conftest import HEADER, flight, flights_on_days, write_month
+from conftest import HEADER, cancelled, flight, flights_on_days, write_month
 from lakehouse import bronze, gold, silver
 from lakehouse.catalog import get_catalog, register
 from lakehouse.pipeline import load_month, month_range, run
@@ -176,6 +176,28 @@ def test_gold_fails_loudly_if_the_fact_loses_rows(cfg, contract, monkeypatch, tm
         gold.build_gold(get_catalog(cfg))
 
 
+def test_report_cubes_add_up_to_the_fact_table(cfg, contract):
+    write_month(
+        cfg,
+        "2025-01",
+        flights_on_days("2025-01", 30) + [flight(Flight_Number_Reporting_Airline="7", **cancelled("A"))],
+    )
+    write_month(cfg, "2025-02", flights_on_days("2025-02", 12, Reporting_Airline="DL", CRSDepTime="1815"))
+    run(cfg, ["2025-01", "2025-02"], contract)
+    [(fact, summary, hours, routes, cancels)] = query(
+        cfg,
+        ["gold.fact_flight", "gold.rpt_flight_summary", "gold.rpt_departure_hour", "gold.rpt_route_summary"],
+        """
+        SELECT (SELECT count(*) FROM gold_fact_flight),
+               (SELECT sum(scheduled) FROM gold_rpt_flight_summary),
+               (SELECT sum(scheduled) FROM gold_rpt_departure_hour),
+               (SELECT sum(scheduled) FROM gold_rpt_route_summary),
+               (SELECT sum(cancelled_carrier) FROM gold_rpt_flight_summary)""",
+    )
+    assert fact == summary == hours == routes == 43
+    assert cancels == 1
+
+
 def test_report_embeds_the_gold_numbers(cfg, contract, tmp_path):
     from lakehouse.report import build_report
 
@@ -185,8 +207,51 @@ def test_report_embeds_the_gold_numbers(cfg, contract, tmp_path):
         flights_on_days("2025-01", 30) + [flight(Origin="??", Flight_Number_Reporting_Airline="9")],
     )
     run(cfg, ["2025-01"], contract)
-    html = build_report(get_catalog(cfg), tmp_path / "site").read_text()
+    html = build_report(get_catalog(cfg), tmp_path / "site", cfg.landing).read_text()
     data = json.loads(html.split("const D = ", 1)[1].split(";\n", 1)[0])
-    assert data["totals"]["flights"] == 30
-    assert data["quality"] == [{"month": "2025-01", "bronze": 31, "quarantined": 1}]
-    assert data["examples"][0]["violations"] == ["pattern:origin"]
+    cols = data["summary"]["columns"]
+    assert sum(r[cols.index("scheduled")] for r in data["summary"]["rows"]) == 30
+    [load] = data["ops"]["loads"]
+    assert (load["bronze_rows"], load["silver_rows"], load["quarantined_rows"], load["fact_rows"]) == (
+        31,
+        30,
+        1,
+        30,
+    )
+    assert data["ops"]["quarantine"][0]["violations"] == ["pattern:origin"]
+    assert {"check": "pattern:origin", "kind": "pattern", "failures": 1} in data["ops"]["checks"]
+    assert {t["table"] for t in data["ops"]["inventory"]} >= {
+        "bronze.flights",
+        "silver.flights",
+        "gold.fact_flight",
+    }
+
+
+def test_audit_records_every_stage_and_failures(cfg):
+    from lakehouse import audit
+    from lakehouse.contract import load_contract
+
+    write_month(cfg, "2025-01", flights_on_days("2025-01", 10))
+    run(cfg, ["2025-01"])
+    write_month(cfg, "2025-02", flights_on_days("2025-02", 10, Origin="??"))  # every row breaks the contract
+    with pytest.raises(silver.ContractBreach):
+        load_month(cfg, "2025-02", load_contract())
+
+    rows = query(
+        cfg,
+        [audit.TABLE],
+        """
+        SELECT source_month, stage, status, rows_out, rows_quarantined, detail LIKE 'ContractBreach%'
+        FROM ops_load_audit ORDER BY started_at""",
+    )
+    assert [r[:3] for r in rows] == [
+        ("2025-01", "landing", "succeeded"),
+        ("2025-01", "bronze", "succeeded"),
+        ("2025-01", "silver", "succeeded"),
+        (None, "gold", "succeeded"),
+        ("2025-02", "landing", "succeeded"),
+        ("2025-02", "bronze", "succeeded"),
+        ("2025-02", "silver", "failed"),
+    ]
+    assert rows[2][3:5] == (10, 0)
+    assert rows[-1][5] is True

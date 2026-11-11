@@ -1,152 +1,154 @@
 # open-lakehouse
 
-A medallion lakehouse (bronze, silver, gold) built only from open tools: **Apache Iceberg** tables,
-**DuckDB** for SQL, **Dagster** for orchestration and a **YAML data contract** that generates the
-silver schema and its quality checks. It runs on a laptop with one command, and loads public data:
-every scheduled US domestic flight from the Bureau of Transportation Statistics (BTS).
+At work I build medallion pipelines on Azure Databricks. This is the same pattern rebuilt from
+open-source parts, so I could see how each piece actually works without a platform doing it for me:
+Apache Iceberg tables, DuckDB for the SQL, Dagster for scheduling, and a YAML data contract that
+drives the silver layer.
 
-**[See the report it builds →](https://sidantap.github.io/portfolio-redesign/lakehouse/)**
-3.4 million flights, January to June 2025, downloaded and loaded in about two minutes.
+The data is public: every scheduled domestic flight reported to the Bureau of Transportation
+Statistics (BTS). Six months of 2025 is 3.45 million rows. A full run, including downloading
+175 MB of zipped CSV from BTS, took 2 minutes 16 seconds on a 4-vCPU container.
 
-![Architecture](docs/architecture.svg)
+The report it produces: **https://sidantap.github.io/portfolio-redesign/lakehouse/**
+(five pages with slicers: summary, carriers, airports and routes, delays, and data operations).
 
-The point isn't the flight data. It's the patterns a production lakehouse needs, built without a
-vendor platform, so each one is visible in a few hundred lines:
+![Data flow](docs/figures/architecture.svg)
 
-| Pattern | Where |
-|---|---|
-| Immutable landing zone with checksums and lineage | [`landing.py`](src/lakehouse/landing.py) |
-| Idempotent, partition-scoped loads: re-running a month replaces exactly that month | [`bronze.py`](src/lakehouse/bronze.py), [`silver.py`](src/lakehouse/silver.py) |
-| Schema-drift detection, and additive schema evolution with Iceberg | [`bronze.py`](src/lakehouse/bronze.py), [`catalog.py`](src/lakehouse/catalog.py) |
-| A data contract compiled to SQL: types, required fields, ranges, patterns, cross-column rules, primary key | [`silver_flights.yml`](src/lakehouse/contracts/silver_flights.yml), [`contract.py`](src/lakehouse/contract.py) |
-| Quarantine instead of dropping rows, with the reason and the raw values | [`silver.py`](src/lakehouse/silver.py) |
-| Reconciliation on every load, and a quarantine budget that stops bad months | [`silver.py`](src/lakehouse/silver.py), [`gold.py`](src/lakehouse/gold.py) |
-| Star schema with a Slowly Changing Dimension Type 2, built with gaps-and-islands SQL | [`dim_airport.sql`](src/lakehouse/sql/gold/dim_airport.sql) |
-| Snapshots, time travel and snapshot expiry | [`cli.py`](src/lakehouse/cli.py) |
-| Partitioned software-defined assets, asset checks and a schedule | [`definitions.py`](src/lakehouse/definitions.py) |
-
-## Run it
-
-With [uv](https://docs.astral.sh/uv/):
+## Running it
 
 ```bash
 uv sync
-uv run lakehouse run --months 2025-01:2025-03   # downloads ~80 MB from BTS, about a minute
-uv run lakehouse report --out site               # open site/index.html
+uv run lakehouse run --months 2025-01:2025-03     # ~85 MB download, about a minute
+uv run lakehouse report --out site                # then open site/index.html
 ```
 
-Or with Docker, which starts the Dagster UI at http://localhost:3000:
+Or in Docker, with the Dagster UI on http://localhost:3000:
 
 ```bash
 docker compose up
 docker compose run --rm lakehouse lakehouse run --months 2025-01:2025-03
 ```
 
-Everything lives in `./lakehouse_data` (set `LAKEHOUSE_HOME` to move it): the landed zips,
-the Iceberg warehouse of Parquet and metadata files, and the SQLite catalog. Delete the folder to start over.
+Everything is written under `./lakehouse_data` (set `LAKEHOUSE_HOME` to change it): the landed zip
+files, the Iceberg warehouse (Parquet plus metadata) and a SQLite catalog file. Deleting the folder
+resets everything.
 
-## A tour
+Other commands: `lakehouse tables`, `lakehouse history <table>`, `lakehouse sql "<query>"`
+(add `--at table=<snapshot_id>` to read a table as it was), `lakehouse quarantine` and
+`lakehouse maintain --keep 5` to expire old snapshots.
 
-```text
-$ lakehouse run --months 2025-01:2025-06
-2025-01:   539,747 bronze    539,747 silver       0 quarantined (0.000%)
-2025-02:   504,884 bronze    504,884 silver       0 quarantined (0.000%)
-2025-03:   600,872 bronze    600,871 silver       1 quarantined (0.000%)
-2025-04:   583,950 bronze    583,950 silver       0 quarantined (0.000%)
-2025-05:   605,648 bronze    605,648 silver       0 quarantined (0.000%)
-2025-06:   611,575 bronze    611,575 silver       0 quarantined (0.000%)
-gold: dim_airport 346, dim_carrier 14, dim_date 181, fact_flight 3,446,675, ...
-```
+## How it fits together
 
-The one quarantined row is a real error in the government data. The contract caught it and recorded why:
+**Landing.** Each month's zip is downloaded once to a temporary name, checked, then renamed into
+place, with a small JSON manifest beside it (URL, size, SHA-256, download time). Files in landing
+are never modified.
 
-```text
-$ lakehouse quarantine
-│ 2025-03 │ max:crs_elapsed_min │ 1 │
-{"FlightDate":"2025-03-30", "Reporting_Airline":"OH", "Origin":"CLT", "Dest":"TYS",
- "CRSDepTime":"2249", "CRSArrTime":"2359", "CRSElapsedTime":"1510.00", "Distance":"177.00", ...}
-```
+**Bronze** (`bronze.flights`) is the CSV as it arrived: all 110 columns kept as text, plus the
+source month, file name, row number, batch id and load time. It's partitioned by source month and
+each load overwrites only its own month, so re-running a month doesn't duplicate anything. Bronze
+refuses a file only if a column the contract needs has disappeared from the header. New columns are
+fine: Iceberg adds them to the table (schema evolution) and older snapshots still read normally.
 
-A 177-mile flight from Charlotte to Knoxville, scheduled 22:49 to 23:59, listed as taking
-1,510 minutes (25 hours). It stays out of silver and every number built on it, and it's kept with
-its raw values for anyone who wants to fix or replay it.
+**Silver** (`silver.flights`) is typed and validated against
+[`contracts/silver_flights.yml`](src/lakehouse/contracts/silver_flights.yml). That file lists every
+silver column with its source column, type and limits, plus a handful of rules that span columns.
+[`contract.py`](src/lakehouse/contract.py) turns it into a single DuckDB query that casts each column
+and builds a list of the checks each row failed. Rows with an empty list go to silver; the rest go
+to `silver.flights_quarantine` with that list and the original raw values. If more than 0.5% of a
+month fails, nothing is written and the run stops.
 
-Every load is a snapshot, and any snapshot can be queried:
+**Gold** is a star schema (`fact_flight`, `dim_airport`, `dim_carrier`, `dim_date`), a few marts,
+and three summary tables (`rpt_*`) that the report filters in the browser. The airport dimension
+keeps history (SCD Type 2): if BTS changes an airport's code, city name or state, the old version
+gets a `valid_to` date and flights join to whichever version was valid on their date. Airport names
+and coordinates come from [OurAirports](https://ourairports.com/data/), via
+[`scripts/build_airport_seed.py`](scripts/build_airport_seed.py).
 
-```text
-$ lakehouse history silver.flights
- 256461934114983271  2026-11-11 03:52:52  append  month=2025-02  +504884  -0  total=1044631
-5252249241125026134  2026-11-11 03:53:11  append  month=2025-03  +600871  -0  total=1645502
-...
-$ lakehouse sql "SELECT count(*) FROM silver_flights" --at silver.flights=256461934114983271
-│ 1044631 │          <- the table as it was after February loaded
-```
+**Ops.** Every stage of every run writes a row to `ops.load_audit`: start and finish time, rows in
+and out, rows quarantined, status, and the error message if it failed. Iceberg snapshots say what
+changed in a table; the audit table says how the run went.
 
-`lakehouse tables`, `lakehouse sql "<any DuckDB SQL>"` and `lakehouse maintain --keep 5`
-(expire old snapshots) cover the rest.
+Dagster ([`definitions.py`](src/lakehouse/definitions.py)) runs the same functions as assets with
+one partition per month, shows the reconciliation and quarantine-budget results as asset checks,
+and has a schedule that loads month M−3 on the 20th (BTS publishes about three months behind).
 
-## Design decisions
+## The data contract, in practice
 
-**Bronze keeps everything as text.** Typing happens once, in silver, under the contract, where a
-failure can be quarantined with a reason. Bronze only refuses a *file*, when its header lacks a
-column the contract needs: loading it would just fail later and less clearly. New source columns
-are welcome: the bronze table's schema evolves (union by name) and old snapshots stay readable.
+Real BTS data is clean. Across six months the contract rejected exactly one row out of 3,446,676:
 
-**The contract is the schema.** [`silver_flights.yml`](src/lakehouse/contracts/silver_flights.yml)
-declares each silver column's source, type and constraints, plus cross-column rules such as
-*"when BTS reports delay causes, they add up to the minutes the flight arrived late"*.
-[`contract.py`](src/lakehouse/contract.py) compiles it to one DuckDB query that types every
-column and returns, for every row, the list of checks it failed. The docs, the schema and the checks
-can't drift apart because they're the same file.
+| | |
+|---|---|
+| Flight | PSA Airlines 5292, Charlotte (CLT) to Knoxville (TYS), 30 March 2025 |
+| Distance | 177 miles |
+| Scheduled times | 22:49 departure, 23:59 arrival |
+| `CRSElapsedTime` in the file | **1,510 minutes** (about 25 hours) |
+| Check it failed | `max:crs_elapsed_min` (limit 1,440) |
 
-**Nothing disappears silently.** Every month must reconcile: bronze rows = silver rows + quarantined
-rows, and gold's fact table must equal silver. If more than 0.5% of a month fails the contract,
-the load stops before writing anything: that's an upstream change for a person to look at, not
-something to quietly filter.
+It's probably a typo for 70 minutes, but I didn't want the pipeline guessing. The row is kept in
+quarantine with its raw values, and everything downstream reconciles:
+bronze rows = silver rows + quarantined rows, and fact rows = silver rows.
 
-**Loads are idempotent and partition-scoped.** Each month overwrites exactly its own partition in one
-Iceberg transaction, so re-running a month, or loading months out of order, gives the same tables.
-(PyIceberg records an overwrite as a delete snapshot plus an append snapshot, committed together;
-readers never see the table in between.)
+The tests use invented rows to cover the checks real data doesn't trigger, 16 different violations
+in all, including cancelled flights with an arrival time, delay causes that don't add up to the
+arrival delay, midnight written as `2400`, and duplicate keys.
 
-**Gold is a full rebuild.** Bronze and silver load incrementally; gold is rebuilt from silver every
-run. DuckDB does 3.4 million rows in about four seconds, and a full rebuild can never leave a stale
-aggregate or dangling dimension key after a backfill.
+## Numbers from one run
 
-**SCD Type 2 from history, not MERGE.** BTS gives each airport a stable ID, but its code, city name
-and state can change. `dim_airport` turns the sightings in silver into versions with
-`valid_from` / `valid_to` using gaps-and-islands SQL, and the fact table joins each flight to the
-version valid on its date. Rebuilding from history keeps it right when an older month arrives late;
-the tests load months out of order and expect identical versions, including an A → B → A rename
-becoming three versions, not two.
+Six months, January to June 2025, on a 4-vCPU cloud container:
 
-**The catalog is swappable.** A SQLite catalog keeps it laptop-sized. Production would point
-[`catalog.py`](src/lakehouse/catalog.py) at a REST, Glue or Nessie catalog and object storage;
-nothing else changes, and the same tables can be read by Spark, Trino or Snowflake.
+![Load times](docs/figures/load_times.svg)
+
+Downloading from BTS is most of the time: 11 to 19 seconds per month in this run, and up to
+38 seconds in an earlier one, depending on the server. Bronze and silver each take a little over
+3 seconds per month (about 600,000 rows), and rebuilding all of gold takes about 4 seconds. These
+come from `ops.load_audit`.
+
+![Storage](docs/figures/storage.svg)
+
+The 1.56 GB of CSV is 104 MB as bronze Parquet, even with every column stored as text. Silver is
+*larger* than bronze, which surprised me. Most of the difference is `flight_key`, a 16-character hash
+I added as a surrogate key: random hex doesn't compress, and that one column is 32 MB, 22% of silver.
+The natural key columns are already there, so I'd drop it, or compute it when needed, next time.
+
+## Things that went wrong
+
+- **DuckDB 2.0 changed under me.** The `x -> expr` lambda syntax is deprecated (now `lambda x: expr`)
+  and `fetch_arrow_table()` was removed in favour of `to_arrow_table()`. I pinned `duckdb>=2.0,<3`.
+- **PyIceberg partition transforms need an extra package.** Writing to a `month(flight_date)`
+  partition failed until I added `pyiceberg-core`.
+- **An overwrite is two snapshots.** PyIceberg commits a replace as a delete snapshot followed by an
+  append snapshot in one transaction. Readers never see the gap, but `lakehouse history` shows both,
+  and time-travelling to the delete snapshot shows the month missing.
+- **0/0 is NaN in DuckDB, not NULL.** A test with a carrier whose flights were all cancelled caught
+  an on-time rate of NaN. Every rate now divides by `nullif(denominator, 0)`.
+- **The airport reference data was "ahead" of BTS.** OurAirports already lists Palm Beach as `DJT`;
+  BTS still reports `PBI`. The seed script matches on IATA code first, then on the ICAO code.
+- **Timings in snapshot properties were wrong.** I first stored durations as snapshot properties,
+  but those are set before the write, so they left out the Parquet write. That's why the audit
+  table exists.
 
 ## Tests
 
-`uv run pytest` runs 35 tests in about 20 seconds, with no network: they build small files in the
-real BTS layout from made-up flights.
+`uv run pytest`: 37 tests, about 25 seconds, no network. They write small zip files in the real BTS
+layout (the header is copied from a real file) with made-up flights, and cover the contract checks,
+idempotent reloads, time travel, schema drift and evolution, the SCD Type 2 versions (loaded in order
+and out of order), reconciliation, the audit table recording a failed stage, the report's summary
+tables adding back up to the fact table, and the Dagster assets. CI runs ruff, the tests and a Docker
+build on every push.
 
-- every kind of contract violation is caught and named (16 cases), duplicates keep the first row,
-  and midnight written as `2400` lands on the next day
-- a month over the quarantine budget fails and writes nothing
-- reloading a month replaces it; other months are untouched
-- time travel returns the earlier data after a reload
-- a missing source column is schema drift; a new one evolves the bronze schema
-- SCD Type 2 versions are correct in order and when backfilled
-- gold reconciles with silver, and a broken fact query fails loudly
-- the report embeds the gold numbers and the quarantined rows
-- the Dagster assets materialize, and their checks pass
+## Limitations
 
-CI runs lint, the tests and a Docker build on every push.
+- The SQLite catalog allows one writer at a time. A shared deployment would use a REST, Glue or
+  Nessie catalog and object storage; only [`catalog.py`](src/lakehouse/catalog.py) would change.
+- Gold is rebuilt in full on every run. That's seconds at this size but wouldn't be at years of data;
+  the fact table would need to become incremental by month.
+- Times are local to each airport and there's no time-zone handling, so "hour of day" means the
+  scheduled local hour.
+- BTS only covers the larger US carriers, and only domestic flights.
 
-## Data
+## Data and licences
 
-[BTS Reporting Carrier On-Time Performance (1987–present)](https://www.transtats.bts.gov/),
-public domain. One zip per month, published about three months after the month ends; the Dagster
-schedule loads month − 3 on the 20th. Carrier names come from [`seeds/carriers.csv`](src/lakehouse/seeds/carriers.csv);
-an unknown code still loads, as "Unknown carrier".
-
-MIT licensed.
+- Flights: [BTS Reporting Carrier On-Time Performance (1987–present)](https://www.transtats.bts.gov/), public domain.
+- Airports: [OurAirports](https://ourairports.com/data/), public domain.
+- Carrier names: [`seeds/carriers.csv`](src/lakehouse/seeds/carriers.csv). A code that isn't in it still loads as "Unknown carrier".
+- Code: MIT.

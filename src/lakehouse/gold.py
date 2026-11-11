@@ -30,6 +30,10 @@ MODELS: list[tuple[str, list]] = [
     ("gold.mart_carrier_month", []),
     ("gold.mart_route_month", []),
     ("gold.mart_airport_hour", []),
+    # additive cubes behind the report's filters
+    ("gold.rpt_flight_summary", []),
+    ("gold.rpt_departure_hour", []),
+    ("gold.rpt_route_summary", []),
 ]
 
 
@@ -47,6 +51,7 @@ def build_gold(cat: Catalog, only: list[str] | None = None) -> GoldResult:
     with duckdb.connect() as con:
         register(con, cat, [silver.TABLE])
         con.register("carriers_seed", pacsv.read_csv(SEEDS_DIR / "carriers.csv"))
+        con.register("airports_seed", pacsv.read_csv(SEEDS_DIR / "airports.csv"))
         silver_rows = con.execute("SELECT count(*) FROM silver_flights").fetchone()[0]
 
         for ident, partition in MODELS:
@@ -58,7 +63,8 @@ def build_gold(cat: Catalog, only: list[str] | None = None) -> GoldResult:
             data = con.execute((SQL_DIR / "gold" / f"{name}.sql").read_text()).to_arrow_table()
             table = ensure_table(cat, ident, data.schema, partition)
             table.overwrite(
-                conform(data, table), snapshot_properties={"layer": "gold", "rows": str(data.num_rows)}
+                conform(data, table),
+                snapshot_properties={"layer": "gold", "rows": str(data.num_rows)},
             )
             con.register(table_name(ident), data)
             rows[name] = data.num_rows

@@ -97,7 +97,11 @@ def load_silver(cat: Catalog, contract: Contract, month: str) -> SilverResult:
             f"(limit {contract.max_quarantine_rate:.2%}). Top checks: {top}. Nothing was written."
         )
 
-    props = {"source_month": month, "contract_version": contract.version, "layer": "silver"}
+    props = {
+        "source_month": month,
+        "contract_version": contract.version,
+        "layer": "silver",
+    }
     table = ensure_table(cat, TABLE, silver.schema, [("flight_date", MonthTransform(), "flight_month")])
     table.overwrite(
         conform(silver, table),

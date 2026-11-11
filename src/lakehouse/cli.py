@@ -115,7 +115,7 @@ def cmd_maintain(cfg: Config, args: argparse.Namespace) -> int:
 def cmd_report(cfg: Config, args: argparse.Namespace) -> int:
     from .report import build_report
 
-    path = build_report(get_catalog(cfg), args.out)
+    path = build_report(get_catalog(cfg), args.out, cfg.landing)
     print(f"report written to {path}")
     return 0
 

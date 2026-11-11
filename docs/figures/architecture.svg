@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 470" width="960" height="470" font-family="Arial, 'Liberation Sans', Helvetica, sans-serif" font-size="12" fill="#222">
+  <title>open-lakehouse data flow</title>
+  <desc>BTS monthly zip files are landed, loaded to bronze, validated against a data contract into silver (with a quarantine table), and modeled into a gold star schema and report tables. DuckDB executes the SQL, Iceberg tables are tracked in a SQLite catalog, and Dagster schedules the monthly partitions.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="#222"/></marker>
+    <g id="db">
+      <path d="M0,8 v34 a46,8 0 0 0 92,0 v-34" fill="#fff" stroke="#222"/>
+      <ellipse cx="46" cy="8" rx="46" ry="8" fill="#fff" stroke="#222"/>
+    </g>
+  </defs>
+  <rect x="0.5" y="0.5" width="959" height="469" fill="#fff" stroke="#bbb"/>
+  <text x="16" y="24" font-size="14" font-weight="bold">open-lakehouse: data flow</text>
+  <text x="16" y="41" fill="#555">One partition per month. Arrows show how data moves.</text>
+
+  <!-- swimlane labels -->
+  <g font-size="11" fill="#555" letter-spacing="1">
+    <text x="16" y="76">SOURCE</text><text x="160" y="76">LANDING</text><text x="316" y="76">BRONZE</text>
+    <text x="484" y="76">SILVER</text><text x="676" y="76">GOLD</text>
+  </g>
+  <g stroke="#ccc" stroke-dasharray="3 3">
+    <line x1="146" y1="62" x2="146" y2="330"/><line x1="302" y1="62" x2="302" y2="330"/>
+    <line x1="470" y1="62" x2="470" y2="330"/><line x1="662" y1="62" x2="662" y2="330"/>
+  </g>
+
+  <!-- source -->
+  <rect x="16" y="96" width="116" height="74" fill="#fff" stroke="#222"/>
+  <text x="26" y="116" font-weight="bold">BTS TranStats</text>
+  <text x="26" y="134">On-Time Perf.</text>
+  <text x="26" y="150">1 zip / month</text>
+  <text x="26" y="164" fill="#555" font-size="11">~30 MB, 110 cols</text>
+  <rect x="16" y="214" width="116" height="58" fill="#fff" stroke="#222"/>
+  <text x="26" y="234" font-weight="bold">OurAirports</text>
+  <text x="26" y="252">airports.csv</text>
+  <text x="26" y="266" fill="#555" font-size="11">names, lat / lon</text>
+
+  <!-- landing: document stack -->
+  <path d="M168,100 h104 v60 q-26,12 -52,0 t-52,0 z" fill="#fff" stroke="#222"/>
+  <path d="M164,96 h104" stroke="#222" fill="none"/><path d="M160,92 h104" stroke="#222" fill="none"/>
+  <text x="178" y="120" font-weight="bold">landing/</text>
+  <text x="178" y="137">ontime_*.zip</text>
+  <text x="178" y="152" fill="#555" font-size="11">+ manifest.json</text>
+  <text x="160" y="190" font-size="11" fill="#555">immutable; SHA-256,</text>
+  <text x="160" y="204" font-size="11" fill="#555">bytes, URL, timing</text>
+  <rect x="160" y="226" width="128" height="40" fill="#fff" stroke="#222"/>
+  <text x="170" y="244" font-weight="bold">seeds/</text>
+  <text x="170" y="259" font-size="11">airports, carriers</text>
+
+  <!-- bronze -->
+  <use href="#db" x="330" y="96"/>
+  <text x="376" y="132" text-anchor="middle" font-weight="bold">bronze</text>
+  <text x="376" y="146" text-anchor="middle">.flights</text>
+  <text x="316" y="176" font-size="11" fill="#555">all columns as text</text>
+  <text x="316" y="190" font-size="11" fill="#555">part: _source_month</text>
+  <text x="316" y="204" font-size="11" fill="#555">schema-drift check</text>
+
+  <!-- silver -->
+  <rect x="484" y="96" width="164" height="54" fill="#f2f2f2" stroke="#222"/>
+  <text x="494" y="116" font-weight="bold">contract.yml → SQL</text>
+  <text x="494" y="133" font-size="11">types, ranges, patterns,</text>
+  <text x="494" y="146" font-size="11">rules, primary key (99)</text>
+  <use href="#db" x="484" y="182"/>
+  <text x="530" y="218" text-anchor="middle" font-weight="bold">silver</text>
+  <text x="530" y="232" text-anchor="middle">.flights</text>
+  <rect x="584" y="244" width="74" height="40" fill="#fff" stroke="#222" stroke-dasharray="4 2"/>
+  <text x="621" y="260" text-anchor="middle" font-size="11" font-weight="bold">quarantine</text>
+  <text x="621" y="275" text-anchor="middle" font-size="10" fill="#555">+ reasons</text>
+  <text x="484" y="262" font-size="11" fill="#555">part: month</text>
+  <text x="484" y="276" font-size="11" fill="#555">(flight_date)</text>
+  <text x="484" y="300" font-size="11" fill="#555">bronze = silver + quarantine</text>
+
+  <!-- gold -->
+  <rect x="676" y="92" width="268" height="122" fill="#fff" stroke="#222"/>
+  <text x="686" y="110" font-weight="bold">Star schema</text>
+  <rect x="770" y="140" width="80" height="34" fill="#f2f2f2" stroke="#222"/>
+  <text x="810" y="155" text-anchor="middle" font-weight="bold" font-size="11">fact_flight</text>
+  <text x="810" y="168" text-anchor="middle" font-size="10" fill="#555">3.4M rows</text>
+  <g font-size="11">
+    <rect x="686" y="120" width="70" height="22" fill="#fff" stroke="#222"/><text x="721" y="135" text-anchor="middle">dim_airport</text>
+    <rect x="686" y="176" width="70" height="22" fill="#fff" stroke="#222"/><text x="721" y="191" text-anchor="middle">dim_date</text>
+    <rect x="864" y="148" width="72" height="22" fill="#fff" stroke="#222"/><text x="900" y="163" text-anchor="middle">dim_carrier</text>
+  </g>
+  <g stroke="#222"><line x1="756" y1="131" x2="770" y2="148"/><line x1="756" y1="187" x2="770" y2="168"/><line x1="850" y1="158" x2="864" y2="158"/></g>
+  <text x="686" y="208" font-size="10" fill="#555">dim_airport is SCD Type 2 (valid_from / valid_to)</text>
+  <rect x="676" y="232" width="268" height="60" fill="#fff" stroke="#222"/>
+  <text x="686" y="250" font-weight="bold">Marts and report cubes</text>
+  <text x="686" y="267" font-size="11">mart_carrier_month, mart_route_month, …</text>
+  <text x="686" y="282" font-size="11">rpt_flight_summary, rpt_departure_hour, …</text>
+  <rect x="790" y="306" width="154" height="24" fill="#fff" stroke="#222"/>
+  <text x="867" y="322" text-anchor="middle" font-size="11">Static HTML report</text>
+
+  <!-- data arrows -->
+  <g stroke="#222" fill="none" marker-end="url(#a)">
+    <path d="M132,133 H156"/><path d="M132,243 H156"/>
+    <path d="M272,130 H326"/>
+    <path d="M422,130 H480"/>
+    <path d="M566,150 V176"/>
+    <path d="M576,222 C590,236 596,238 604,242"/>
+    <path d="M576,206 C612,206 640,196 672,190"/>
+    <path d="M288,258 V318 H664 V206 H672"/>
+    <path d="M810,214 V228"/>
+    <path d="M867,292 V302"/>
+  </g>
+
+  <!-- platform band -->
+  <g font-size="11">
+    <rect x="16" y="352" width="928" height="34" fill="#f2f2f2" stroke="#222"/>
+    <text x="28" y="373"><tspan font-weight="bold">Execution:</tspan> DuckDB SQL over Arrow scans · <tspan font-weight="bold">Storage:</tspan> Apache Iceberg (Parquet + metadata), SQLite catalog · snapshots, time travel, expiry</text>
+    <rect x="16" y="396" width="928" height="34" fill="#fff" stroke="#222" stroke-dasharray="5 3"/>
+    <text x="28" y="417"><tspan font-weight="bold">Orchestration:</tspan> Dagster software-defined assets, monthly partitions, asset checks (reconciliation, quarantine budget), schedule on the 20th for month − 3</text>
+  </g>
+  <text x="16" y="456" font-size="10.5" fill="#555">Every load reconciles row counts between layers. Gold is a full rebuild from silver on each run.</text>
+</svg>

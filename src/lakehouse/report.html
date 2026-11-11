@@ -3,379 +3,679 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>US Flight Reliability · open-lakehouse</title>
-<meta name="description" content="On-time performance of US airlines, built by an open-source medallion lakehouse: Apache Iceberg, DuckDB, Dagster and data contracts on BTS data.">
+<title>Flight Operations Performance Report</title>
+<meta name="description" content="On-time performance of US carriers from BTS data, built from the gold layer of open-lakehouse.">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
 <style>
 :root {
-  color-scheme: light;
-  --bg: #f6f5f1; --surface: #fcfcfb; --line: #e4e2db; --grid: #ecebe5;
-  --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #7a786f;
-  --series: #2a78d6; --series-soft: #cde2fb; --focus: #2a78d6;
-  --s1: #cde2fb; --s2: #9ec5f4; --s3: #6da7ec; --s4: #3987e5; --s5: #256abf; --s6: #184f95; --s7: #0d366b;
-  --bad: #d03b3b;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    color-scheme: dark;
-    --bg: #121211; --surface: #1a1a19; --line: #2e2e2b; --grid: #262624;
-    --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8f8d84;
-    --series: #3987e5; --series-soft: #184f95; --focus: #6da7ec;
-    --s1: #104281; --s2: #184f95; --s3: #256abf; --s4: #2a78d6; --s5: #5598e7; --s6: #86b6ef; --s7: #cde2fb;
-  }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #121211; --surface: #1a1a19; --line: #2e2e2b; --grid: #262624;
-  --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8f8d84;
-  --series: #3987e5; --series-soft: #184f95; --focus: #6da7ec;
-  --s1: #104281; --s2: #184f95; --s3: #256abf; --s4: #2a78d6; --s5: #5598e7; --s6: #86b6ef; --s7: #cde2fb;
+  --canvas: #f3f2f1; --card: #ffffff; --border: #e1dfdd; --border-2: #c8c6c4;
+  --text: #252423; --text-2: #605e5c; --text-3: #8a8886;
+  --navy: #1b2a41; --accent: #2a78d6;
+  --good: #107c10; --bad: #c50f1f;
+  --font: "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 400 16px/1.55 var(--sans); }
-.wrap { max-width: 1080px; margin: 0 auto; padding: 40px 16px 64px; }
-header { display: grid; gap: 10px; margin-bottom: 28px; }
-.eyebrow { font: 500 12px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
-h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0; letter-spacing: -.01em; font-weight: 650; }
-h2 { font-size: 19px; margin: 0; font-weight: 620; }
-.lede { color: var(--ink-2); max-width: 64ch; margin: 0; }
-.meta { font: 12px var(--mono); color: var(--ink-3); }
-a { color: var(--series); }
-.grid { display: grid; gap: 16px; align-items: start; grid-template-columns: repeat(12, minmax(0, 1fr)); }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; min-width: 0; }
-.span-12 { grid-column: span 12; } .span-7 { grid-column: span 7; } .span-5 { grid-column: span 5; }
-.span-3 { grid-column: span 3; } .span-6 { grid-column: span 6; }
-@media (max-width: 860px) { .span-7, .span-5, .span-6 { grid-column: span 12; } .span-3 { grid-column: span 6; } }
-.card-head { display: grid; gap: 4px; margin-bottom: 14px; }
-.card-head p { margin: 0; color: var(--ink-2); font-size: 14px; }
-.kpi .label { font-size: 13px; color: var(--ink-2); }
-.kpi .value { font-size: clamp(26px, 3.4vw, 34px); font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
-.kpi .sub { font-size: 12px; color: var(--ink-3); }
-svg { display: block; width: 100%; height: auto; overflow: visible; }
-svg text { fill: var(--ink-2); font: 12px var(--sans); font-variant-numeric: tabular-nums; }
-svg .muted { fill: var(--ink-3); }
-svg .strong { fill: var(--ink); font-weight: 600; }
-.gridline { stroke: var(--grid); stroke-width: 1; }
-.axis { stroke: var(--line); stroke-width: 1; }
-.bar { fill: var(--series); }
-.hit { fill: transparent; cursor: default; }
-.hit:hover + .bar, .row:hover .bar { opacity: .82; }
-.line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; }
-.dot { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
-.cell { stroke: var(--surface); stroke-width: 2; }
-.tip { position: fixed; pointer-events: none; z-index: 10; background: var(--ink); color: var(--bg);
-  font-size: 12.5px; line-height: 1.45; padding: 8px 10px; border-radius: 8px; max-width: 260px;
-  opacity: 0; transition: opacity .12s; font-variant-numeric: tabular-nums; }
-.tip.on { opacity: 1; }
-.tip b { font-weight: 600; }
-.legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); margin-top: 10px; flex-wrap: wrap; }
-.ramp { display: flex; } .ramp i { width: 22px; height: 10px; display: block; }
-.ramp i:first-child { border-radius: 3px 0 0 3px; } .ramp i:last-child { border-radius: 0 3px 3px 0; }
-details { margin-top: 12px; font-size: 13px; }
-summary { cursor: pointer; color: var(--ink-2); }
-summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.scroll { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
-th, td { text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
-th { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); }
-td.num, th.num { text-align: right; }
-.pill { font: 11px var(--mono); padding: 2px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
-.pill.bad { color: var(--bad); border-color: currentColor; }
-pre { margin: 0; font: 12px/1.5 var(--mono); color: var(--ink-2); white-space: pre-wrap; word-break: break-word; }
-.stack { display: grid; gap: 10px; }
-.pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-@media (max-width: 640px) { .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.stage { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
-.stage b { display: block; font-size: 14px; }
-.stage span { font-size: 12.5px; color: var(--ink-2); }
-footer { margin-top: 28px; font-size: 13px; color: var(--ink-3); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.theme { font: inherit; background: none; border: 1px solid var(--line); color: var(--ink-2); border-radius: 99px; padding: 3px 10px; cursor: pointer; }
+body { margin: 0; background: var(--canvas); color: var(--text); font: 13px/1.45 var(--font); }
+button, select { font: inherit; color: inherit; }
+
+.top { background: var(--navy); color: #fff; }
+.top .in { max-width: 1360px; margin: 0 auto; padding: 10px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.mark { width: 30px; height: 30px; background: #fff; color: var(--navy); font-weight: 700; display: grid; place-items: center; font-size: 12px; flex: none; }
+.top h1 { font-size: 16px; font-weight: 600; margin: 0; }
+.top .sub { font-size: 12px; color: #c7d0dc; }
+.top .right { margin-left: auto; text-align: right; font-size: 11.5px; color: #c7d0dc; line-height: 1.5; }
+.top .right b { color: #fff; font-weight: 600; }
+@media (max-width: 640px) { .top .right { margin-left: 0; text-align: left; } }
+
+.tabs { background: #fff; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
+.tabs .in { max-width: 1360px; margin: 0 auto; padding: 0 8px; display: flex; overflow-x: auto; scrollbar-width: none; }
+.tabs button { background: none; border: 0; border-bottom: 3px solid transparent; padding: 11px 12px 8px; cursor: pointer; white-space: nowrap; color: var(--text-2); font-weight: 600; font-size: 12.5px; }
+.tabs button[aria-selected="true"] { color: var(--navy); border-bottom-color: var(--navy); }
+.tabs button:hover { color: var(--text); background: #faf9f8; }
+.tabs button:focus-visible, select:focus-visible, .btn:focus-visible, .act button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.filters { max-width: 1360px; margin: 12px auto 0; padding: 0 16px; }
+.filters .in { background: #fff; border: 1px solid var(--border); padding: 10px 12px; display: flex; gap: 10px 14px; align-items: flex-end; flex-wrap: wrap; }
+.slicer { display: grid; gap: 3px; min-width: 120px; }
+@media (max-width: 640px) { .slicer { flex: 1 1 40%; } .slicer select { max-width: none; width: 100%; } }
+.slicer label { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
+.slicer select { border: 1px solid var(--border-2); background: #fff; padding: 5px 26px 5px 8px; border-radius: 2px; max-width: 240px; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #605e5c 50%), linear-gradient(135deg, #605e5c 50%, transparent 50%);
+  background-position: calc(100% - 13px) 50%, calc(100% - 8px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+.slicer select:disabled, .btn:disabled { opacity: .5; }
+.btn { border: 1px solid var(--border-2); background: #fff; padding: 5px 12px; border-radius: 2px; cursor: pointer; }
+.btn:hover { background: #f3f2f1; }
+.filters .note { margin-left: auto; font-size: 11.5px; color: var(--text-3); align-self: center; }
+
+main { max-width: 1360px; margin: 0 auto; padding: 12px 16px 24px; }
+.page { display: none; }
+.page.on { display: block; }
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; }
+.v { background: var(--card); border: 1px solid var(--border); padding: 12px 14px; min-width: 0; }
+.c2 { grid-column: span 2; } .c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c5 { grid-column: span 5; }
+.c6 { grid-column: span 6; } .c7 { grid-column: span 7; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; }
+@media (max-width: 1100px) { .c4, .c5, .c6, .c7, .c8 { grid-column: span 12; } .c3 { grid-column: span 6; } .c2 { grid-column: span 4; } }
+@media (max-width: 640px) { .c2, .c3 { grid-column: span 6; } }
+.vh { display: flex; align-items: baseline; gap: 4px 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.vh h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
+.vh .s { font-size: 11.5px; color: var(--text-3); }
+.vh .act { margin-left: auto; }
+.vh .act button { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; font-size: 11.5px; }
+.vh .act button:hover { text-decoration: underline; }
+.chart { width: 100%; height: 300px; }
+.chart.tall { height: 380px; }
+.chart.short { height: 250px; }
+.foot { font-size: 11px; color: var(--text-3); margin-top: 6px; }
+
+.kpi { padding: 12px 14px 10px; }
+.kpi .l { font-size: 11px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: .05em; }
+.kpi .n { font-size: 26px; font-weight: 600; line-height: 1.2; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) { .kpi .n { font-size: 21px; } }
+.kpi .d { font-size: 11.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.good { color: var(--good); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; } .flat { color: var(--text-2); }
+
+.tw { overflow: auto; max-height: 420px; border-top: 1px solid var(--border); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th { position: sticky; top: 0; background: #faf9f8; text-align: left; font-weight: 600; font-size: 11.5px; color: var(--text-2); padding: 6px 8px; border-bottom: 1px solid var(--border-2); white-space: nowrap; cursor: pointer; user-select: none; }
+th.n, td.n { text-align: right; }
+th[aria-sort="ascending"]::after { content: " ▲"; font-size: 9px; }
+th[aria-sort="descending"]::after { content: " ▼"; font-size: 9px; }
+td { padding: 5px 8px; border-bottom: 1px solid #f3f2f1; white-space: nowrap; }
+tbody tr:hover td { background-color: #f8f8f8; }
+tfoot td { font-weight: 600; border-top: 1px solid var(--border-2); background: #faf9f8; position: sticky; bottom: 0; }
+td .bar { display: inline-block; height: 9px; background: #9ec5f4; vertical-align: middle; margin-right: 6px; }
+.mono { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
+.tag { display: inline-block; padding: 0 5px; border: 1px solid var(--border-2); font-size: 11px; border-radius: 2px; margin-right: 3px; color: var(--text-2); }
+.tag.bad { border-color: var(--bad); color: var(--bad); font-weight: 400; }
+.ok { color: var(--good); } .ok::before { content: "✔ "; }
+.fail { color: var(--bad); } .fail::before { content: "✖ "; }
+.rec { white-space: normal; font-size: 11.5px; line-height: 1.5; color: var(--text-2); min-width: 320px; }
+
+.rfoot { max-width: 1360px; margin: 0 auto; padding: 0 16px 28px; display: flex; gap: 8px 24px; flex-wrap: wrap; font-size: 11px; color: var(--text-3); }
+.rfoot a { color: var(--text-2); }
+.rfoot .pg { margin-left: auto; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <span class="eyebrow">open-lakehouse · gold layer report</span>
-    <h1>How reliable were US airlines?</h1>
-    <p class="lede" id="lede"></p>
-    <span class="meta" id="built"></span>
-  </header>
-
-  <div class="grid">
-    <div class="card kpi span-3"><div class="label">Scheduled flights</div><div class="value" id="k-flights"></div><div class="sub" id="k-flights-sub"></div></div>
-    <div class="card kpi span-3"><div class="label">Arrived on time</div><div class="value" id="k-ontime"></div><div class="sub">within 14 min of schedule</div></div>
-    <div class="card kpi span-3"><div class="label">Cancelled</div><div class="value" id="k-cancel"></div><div class="sub">share of scheduled flights</div></div>
-    <div class="card kpi span-3"><div class="label">Rows quarantined</div><div class="value" id="k-quar"></div><div class="sub" id="k-quar-sub"></div></div>
-
-    <section class="card span-7" aria-labelledby="h-carriers">
-      <div class="card-head"><h2 id="h-carriers">On-time arrival rate by carrier</h2><p>Share of completed flights that arrived less than 15 minutes late.</p></div>
-      <div id="c-carriers"></div>
-      <details><summary>Show as table</summary><div class="scroll" id="t-carriers"></div></details>
-    </section>
-
-    <section class="card span-5" aria-labelledby="h-causes">
-      <div class="card-head"><h2 id="h-causes">Where the delay minutes came from</h2><p>Minutes of arrival delay by cause, for flights 15+ minutes late.</p></div>
-      <div id="c-causes"></div>
-      <details><summary>Show as table</summary><div class="scroll" id="t-causes"></div></details>
-    </section>
-
-    <section class="card span-12" aria-labelledby="h-months">
-      <div class="card-head"><h2 id="h-months">On-time rate by month, all carriers</h2><p>The same definition as above, month by month.</p></div>
-      <div id="c-months"></div>
-      <details><summary>Show as table</summary><div class="scroll" id="t-months"></div></details>
-    </section>
-
-    <section class="card span-12" aria-labelledby="h-heat">
-      <div class="card-head"><h2 id="h-heat">Delays build through the day</h2><p>Share of departures leaving 15+ minutes late, by scheduled hour, at the busiest airports.</p></div>
-      <div class="scroll"><div id="c-heat" style="min-width:640px"></div></div>
-      <div class="legend"><span>Fewer delayed</span><span class="ramp" id="ramp"></span><span>More delayed</span><span id="ramp-range" class="meta"></span></div>
-      <details><summary>Show as table</summary><div class="scroll" id="t-heat"></div></details>
-    </section>
-
-    <section class="card span-12" aria-labelledby="h-routes">
-      <div class="card-head"><h2 id="h-routes">The busiest routes</h2><p>Airport pairs with the most scheduled flights, one direction each.</p></div>
-      <div class="scroll" id="t-routes"></div>
-    </section>
-
-    <section class="card span-6" aria-labelledby="h-pipe">
-      <div class="card-head"><h2 id="h-pipe">How this page was built</h2><p>Every number here comes from the gold layer of an open-source lakehouse.</p></div>
-      <div class="pipeline">
-        <div class="stage"><b>Landing</b><span>Monthly BTS zip, downloaded once, SHA-256 recorded</span></div>
-        <div class="stage"><b>Bronze</b><span>Iceberg, every column as text, one partition per month</span></div>
-        <div class="stage"><b>Silver</b><span id="silver-stage">Typed and validated against a data contract</span></div>
-        <div class="stage"><b>Gold</b><span>Star schema with an SCD Type 2 airport dimension, and marts</span></div>
-      </div>
-      <p class="meta" style="margin:14px 0 0">Apache Iceberg · DuckDB · Dagster · PyIceberg · Python</p>
-    </section>
-
-    <section class="card span-6" aria-labelledby="h-quality">
-      <div class="card-head"><h2 id="h-quality">What the data contract caught</h2><p>Rows that broke a check are kept in quarantine with the reason, never dropped.</p></div>
-      <div class="scroll" id="t-quality"></div>
-      <div class="stack" id="examples" style="margin-top:12px"></div>
-    </section>
+<header class="top"><div class="in">
+  <div class="mark" aria-hidden="true">FO</div>
+  <div>
+    <h1>Flight Operations Performance Report</h1>
+    <div class="sub">US domestic scheduled service · reporting carriers · BTS On-Time Performance</div>
   </div>
+  <div class="right" id="hdr"></div>
+</div></header>
 
-  <footer>
-    <span>Data: Bureau of Transportation Statistics, Reporting Carrier On-Time Performance. Built by <a href="https://github.com/sidantap/open-lakehouse">open-lakehouse</a>.</span>
-    <button class="theme" id="theme" type="button">Theme: auto</button>
-  </footer>
-</div>
-<div class="tip" id="tip" role="status" aria-live="polite"></div>
+<nav class="tabs" aria-label="Report pages"><div class="in" role="tablist" id="tabs"></div></nav>
+
+<section class="filters" aria-label="Filters"><div class="in" id="filterbar">
+  <div class="slicer"><label for="f-from">Month from</label><select id="f-from"></select></div>
+  <div class="slicer"><label for="f-to">Month to</label><select id="f-to"></select></div>
+  <div class="slicer"><label for="f-carrier">Carrier</label><select id="f-carrier"></select></div>
+  <div class="slicer"><label for="f-state">Origin state</label><select id="f-state"></select></div>
+  <div class="slicer"><label for="f-airport">Origin airport</label><select id="f-airport"></select></div>
+  <button class="btn" id="f-reset" type="button">Reset filters</button>
+  <span class="note" id="f-note"></span>
+</div></section>
+
+<main>
+  <section class="page" id="p-summary" data-title="Executive Summary">
+    <div class="grid">
+      <div class="v kpi c2" id="k-flights"></div><div class="v kpi c2" id="k-otp"></div><div class="v kpi c2" id="k-cancel"></div>
+      <div class="v kpi c2" id="k-divert"></div><div class="v kpi c2" id="k-delay"></div><div class="v kpi c2" id="k-late"></div>
+      <div class="v c6"><div class="vh"><h2>Scheduled flights by month</h2><span class="s">scheduled departures</span></div><div class="chart short" id="ch-volume"></div></div>
+      <div class="v c6"><div class="vh"><h2>On-time arrival rate by month</h2><span class="s">arrived less than 15 min late, % of completed flights</span></div><div class="chart short" id="ch-otp"></div></div>
+      <div class="v c7"><div class="vh"><h2>Departing airports</h2><span class="s">size = scheduled departures · colour = on-time rate against the selection average</span></div><div class="chart tall" id="ch-map"></div><div class="foot" id="map-foot"></div></div>
+      <div class="v c5"><div class="vh"><h2>Arrival delay minutes by cause</h2><span class="s">thousands of minutes, flights 15+ min late</span></div><div class="chart tall" id="ch-causes"></div></div>
+    </div>
+  </section>
+
+  <section class="page" id="p-carriers" data-title="Carrier Performance">
+    <div class="grid">
+      <div class="v c6"><div class="vh"><h2>On-time arrival rate by carrier</h2><span class="s">dashed line = selection average</span></div><div class="chart tall" id="ch-carrier-otp"></div></div>
+      <div class="v c6"><div class="vh"><h2>Cancellation rate by carrier and reason</h2><span class="s">% of scheduled flights</span></div><div class="chart tall" id="ch-carrier-cancel"></div></div>
+      <div class="v c12"><div class="vh"><h2>Carrier scorecard</h2><span class="s">click a column heading to sort</span><span class="act"><button type="button" data-csv="t-scorecard">Export CSV</button></span></div><div class="tw" id="t-scorecard"></div></div>
+      <div class="v c12"><div class="vh"><h2>On-time arrival rate, carrier by month</h2><span class="s">blue = above, red = below the selection average</span><span class="act"><button type="button" data-csv="t-matrix">Export CSV</button></span></div><div class="tw" id="t-matrix"></div></div>
+    </div>
+  </section>
+
+  <section class="page" id="p-airports" data-title="Airports &amp; Routes">
+    <div class="grid">
+      <div class="v c6"><div class="vh"><h2>Top origin airports</h2><span class="s">top 50 by scheduled departures</span><span class="act"><button type="button" data-csv="t-airports">Export CSV</button></span></div><div class="tw" id="t-airports"></div></div>
+      <div class="v c6"><div class="vh"><h2>Departures delayed 15+ minutes, by weekday and hour</h2><span class="s">scheduled local departure hour</span></div><div class="chart tall" id="ch-hour"></div><div class="foot">The origin state and airport filters don't apply to this visual.</div></div>
+      <div class="v c12"><div class="vh"><h2>Busiest routes</h2><span class="s" id="routes-sub"></span><span class="act"><button type="button" data-csv="t-routes">Export CSV</button></span></div><div class="tw" id="t-routes"></div></div>
+    </div>
+  </section>
+
+  <section class="page" id="p-delays" data-title="Delay Analysis">
+    <div class="grid">
+      <div class="v c6"><div class="vh"><h2>Distribution of arrival delay</h2><span class="s">completed flights, minutes against schedule</span></div><div class="chart" id="ch-dist"></div></div>
+      <div class="v c6"><div class="vh"><h2>Share of delay minutes by cause</h2><span class="s">flights 15+ min late</span></div><div class="chart" id="ch-pie"></div></div>
+      <div class="v c7"><div class="vh"><h2>Delay minutes per late arrival, by carrier and cause</h2><span class="s">average minutes</span></div><div class="chart tall" id="ch-cause-carrier"></div></div>
+      <div class="v c5"><div class="vh"><h2>Cancellations by reason and month</h2><span class="s">flights</span></div><div class="chart tall" id="ch-cancel-month"></div></div>
+    </div>
+  </section>
+
+  <section class="page" id="p-ops" data-title="Data Operations">
+    <div class="grid">
+      <div class="v kpi c3" id="o-loads"></div><div class="v kpi c3" id="o-rows"></div><div class="v kpi c3" id="o-quar"></div><div class="v kpi c3" id="o-checks"></div>
+      <div class="v c8"><div class="vh"><h2>Monthly loads and reconciliation</h2><span class="s">bronze = silver + quarantined; fact = silver</span></div><div class="tw" id="t-loads"></div></div>
+      <div class="v c4"><div class="vh"><h2>Load time by stage</h2><span class="s">seconds per month</span></div><div class="chart short" id="ch-stage"></div></div>
+      <div class="v c12"><div class="vh"><h2>Run history</h2><span class="s">ops.load_audit, one row per stage per month, most recent first</span><span class="act"><button type="button" data-csv="t-runs">Export CSV</button></span></div><div class="tw" id="t-runs"></div></div>
+      <div class="v c12"><div class="vh"><h2>Table inventory</h2><span class="s">Apache Iceberg tables, current snapshot</span></div><div class="tw" id="t-inventory"></div></div>
+      <div class="v c6"><div class="vh"><h2>Data contract checks</h2><span class="s" id="checks-sub"></span></div><div class="tw" id="t-checks"></div></div>
+      <div class="v c6"><div class="vh"><h2>Quarantined records</h2><span class="s">with the failed checks and the raw values as received</span></div><div class="tw" id="t-quarantine"></div></div>
+      <div class="v c12"><div class="vh"><h2>Snapshot log</h2><span class="s">most recent commits, all tables</span><span class="act"><button type="button" data-csv="t-snapshots">Export CSV</button></span></div><div class="tw" id="t-snapshots"></div></div>
+    </div>
+  </section>
+</main>
+
+<footer class="rfoot">
+  <span>Source: U.S. DOT Bureau of Transportation Statistics, Reporting Carrier On-Time Performance (1987–present). Airport reference: OurAirports.</span>
+  <span>Built by <a href="https://github.com/sidantap/open-lakehouse">open-lakehouse</a>.</span>
+  <span class="pg" id="pg"></span>
+</footer>
 
 <script>
+"use strict";
 const D = /*DATA*/null;
-const NS = "http://www.w3.org/2000/svg";
-const pct = (x, d = 1) => x == null ? "–" : (x * 100).toFixed(d) + "%";
-const num = x => x == null ? "–" : Math.round(x).toLocaleString("en-US");
-const monthName = ym => new Date(ym + "-01T00:00:00").toLocaleString("en-US", { month: "short", year: "numeric" });
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-function el(name, attrs = {}, parent) {
-  const n = document.createElementNS(NS, name);
-  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-  if (parent) parent.appendChild(n);
-  return n;
-}
-function text(parent, x, y, s, attrs = {}) { const t = el("text", { x, y, ...attrs }, parent); t.textContent = s; return t; }
-const widthOf = (id, min = 300) => Math.max(min, Math.floor(document.getElementById(id).clientWidth || 640));
-function svg(target, w, h, label) {
-  const s = el("svg", { viewBox: `0 0 ${w} ${h}`, role: "img", "aria-label": label });
-  document.getElementById(target).replaceChildren(s);
-  return s;
-}
-function table(target, head, rows, numeric = []) {
-  const th = head.map((h, i) => `<th class="${numeric.includes(i) ? "num" : ""}">${esc(h)}</th>`).join("");
-  const tr = rows.map(r => "<tr>" + r.map((c, i) => `<td class="${numeric.includes(i) ? "num" : ""}">${c}</td>`).join("") + "</tr>").join("");
-  document.getElementById(target).innerHTML = `<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
-}
+const fmtInt = n => n == null || isNaN(n) ? "–" : Math.round(n).toLocaleString("en-US");
+const fmtPct = (x, d = 1) => x == null || !isFinite(x) ? "–" : (x * 100).toFixed(d) + "%";
+const fmtPct2 = x => fmtPct(x, 2);
+const fmt1 = x => x == null || !isFinite(x) ? "–" : x.toFixed(1);
+const fmtK = n => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(0) + "K" : String(Math.round(n));
+const fmtBytes = b => b == null ? "–" : b >= 1e9 ? (b / 1e9).toFixed(2) + " GB" : b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : (b / 1e3).toFixed(0) + " KB";
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const monthLabel = ym => MONTHS[+ym.slice(5) - 1] + " " + ym.slice(0, 4);
+const monthShort = ym => MONTHS[+ym.slice(5) - 1] + "-" + ym.slice(2, 4);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const div = (a, b) => b ? a / b : null;
 
-// tooltip
-const tip = document.getElementById("tip");
-function hover(node, html) {
-  const show = e => {
-    tip.innerHTML = html; tip.classList.add("on");
-    const r = tip.getBoundingClientRect();
-    let x = (e.clientX ?? 0) + 14, y = (e.clientY ?? 0) + 14;
-    if (e.type === "focus") { const b = node.getBoundingClientRect(); x = b.right + 8; y = b.top; }
-    if (x + r.width > innerWidth - 8) x = innerWidth - r.width - 8;
-    if (y + r.height > innerHeight - 8) y = (e.clientY ?? y) - r.height - 14;
-    tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
-  };
-  node.addEventListener("pointermove", show); node.addEventListener("focus", show);
-  node.addEventListener("pointerleave", () => tip.classList.remove("on"));
-  node.addEventListener("blur", () => tip.classList.remove("on"));
-}
+// categorical slots in their validated order; diverging blue/red with a grey midpoint
+const CAT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"];
+const DIVERGE = ["#c50f1f", "#e8a39e", "#ecebe9", "#9ec5f4", "#256abf"];
+const SEQ = ["#e8f1fc", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
+const CAUSES = [["late_aircraft_delay_min", "Late-arriving aircraft"], ["carrier_delay_min", "Carrier"],
+                ["nas_delay_min", "National Air System"], ["weather_delay_min", "Weather"], ["security_delay_min", "Security"]];
+const CANCELS = [["cancelled_carrier", "Carrier"], ["cancelled_weather", "Weather"],
+                 ["cancelled_nas", "National Air System"], ["cancelled_security", "Security"]];
+const BUCKETS = [["arr_bucket_early_15", "15+ early"], ["arr_bucket_early_0", "0–15 early"], ["arr_bucket_0_15", "0–14 late"],
+                 ["arr_bucket_15_30", "15–29"], ["arr_bucket_30_60", "30–59"], ["arr_bucket_60_120", "60–119"],
+                 ["arr_bucket_120_180", "120–179"], ["arr_bucket_180_plus", "180+"]];
 
-// a horizontal bar: 4px rounded data end, square at the baseline
-function hbar(parent, x, y, w, h) {
-  const r = Math.min(4, w / 2, h / 2);
-  const d = w <= 0 ? "" : `M${x},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x} Z`;
-  return el("path", { d, class: "bar" }, parent);
-}
-function vbar(parent, x, y, w, h) {  // top-rounded, anchored at the bottom
-  const r = Math.min(4, w / 2, h);
-  const d = `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`;
-  return el("path", { d, class: "bar" }, parent);
-}
+function cube(c) { return { ix: Object.fromEntries(c.columns.map((k, i) => [k, i])), rows: c.rows }; }
+const S = cube(D.summary), H = cube(D.hours), R = cube(D.routes);
+const CARRIER = Object.fromEntries(D.carriers.map(c => [c.carrier_code, c]));
+const AIRPORT = Object.fromEntries(D.airports.map(a => [a.airport_code, a]));
+const ALL_MONTHS = [...new Set(S.rows.map(r => r[S.ix.year_month]))].sort();
+const STATES = [...new Set(S.rows.map(r => r[S.ix.origin_state]).filter(Boolean))].sort();
+const cname = code => (CARRIER[code] || {}).carrier_name || code;
+const state = { from: ALL_MONTHS[0], to: ALL_MONTHS.at(-1), carrier: "ALL", st: "ALL", airport: "ALL" };
 
-function header() {
-  const t = D.totals;
-  document.getElementById("lede").textContent =
-    `${num(t.flights)} scheduled flights by ${t.carriers} US carriers, ${monthName(t.first_month)} to ${monthName(t.last_month)}. ` +
-    `Loaded month by month into Apache Iceberg tables, validated against a data contract, and modeled into a star schema.`;
-  document.getElementById("built").textContent = `Built ${D.built} from gold.mart_* · contract ${D.contract.name} v${D.contract.version}`;
-  document.getElementById("k-flights").textContent = num(t.flights);
-  document.getElementById("k-flights-sub").textContent = `${D.months.length} months, ${t.carriers} carriers`;
-  document.getElementById("k-ontime").textContent = pct(t.on_time_rate);
-  document.getElementById("k-cancel").textContent = pct(t.cancel_rate);
-  const q = D.quality.reduce((a, r) => a + r.quarantined, 0);
-  document.getElementById("k-quar").textContent = num(q);
-  document.getElementById("k-quar-sub").textContent = `of ${num(D.quality.reduce((a, r) => a + r.bronze, 0))} rows, ${D.contract.checks} checks`;
-  document.getElementById("silver-stage").textContent = `Typed and checked against a ${D.contract.checks}-check data contract`;
+function keep(c, r, o = {}) {
+  const m = r[c.ix.year_month];
+  if (m < (o.from ?? state.from) || m > (o.to ?? state.to)) return false;
+  if (state.carrier !== "ALL" && r[c.ix.carrier_code] !== state.carrier) return false;
+  if (o.noAirport || !("origin" in c.ix)) return true;
+  const orig = r[c.ix.origin];
+  if (state.airport !== "ALL" && orig !== state.airport) return false;
+  if (state.st !== "ALL" && ("origin_state" in c.ix ? r[c.ix.origin_state] : (AIRPORT[orig] || {}).state) !== state.st) return false;
+  return true;
 }
-
-function carriers() {
-  const rows = D.carriers, W = widthOf("c-carriers"), rowH = 26, top = 4, left = W < 480 ? 124 : 168, right = 52;
-  const H = top + rows.length * rowH + 22;
-  const s = svg("c-carriers", W, H, "Bar chart of on-time arrival rate by carrier");
-  const min = 0.6, max = 0.95, sx = v => left + (Math.max(v, min) - min) / (max - min) * (W - left - right);
-  const tick = W < 480 ? 0.1 : 0.05;
-  for (let v = 0.6; v <= 0.951; v += tick) {
-    el("line", { x1: sx(v), x2: sx(v), y1: top, y2: H - 20, class: "gridline" }, s);
-    text(s, sx(v), H - 4, pct(v, 0), { "text-anchor": "middle", class: "muted" });
+// group rows by a key and sum every numeric measure (all rpt_* measures are additive)
+function group(c, keyFn, o) {
+  const out = new Map(), names = Object.entries(c.ix);
+  for (const r of c.rows) {
+    if (!keep(c, r, o)) continue;
+    const k = keyFn(r);
+    let acc = out.get(k);
+    if (!acc) { acc = { _n: 0 }; out.set(k, acc); }
+    acc._n++;
+    for (const [name, i] of names) {
+      const v = r[i];
+      if (typeof v === "number") acc[name] = (acc[name] || 0) + v; else if (!(name in acc)) acc[name] = v;
+    }
   }
-  rows.forEach((r, i) => {
-    const y = top + i * rowH, g = el("g", { class: "row", tabindex: 0 }, s);
-    text(g, left - 10, y + 16, r.carrier_name, { "text-anchor": "end" });
-    hbar(g, left, y + 5, sx(r.on_time_rate) - left, rowH - 10);
-    text(g, sx(r.on_time_rate) + 6, y + 16, pct(r.on_time_rate), { class: "strong" });
-    el("rect", { x: 0, y, width: W, height: rowH, class: "hit" }, g);
-    hover(g, `<b>${esc(r.carrier_name)}</b> (${r.carrier_code})<br>On time: ${pct(r.on_time_rate)}<br>Cancelled: ${pct(r.cancel_rate)}<br>${num(r.flights)} flights`);
-  });
-  table("t-carriers", ["Carrier", "Code", "Flights", "On time", "Cancelled"],
-    rows.map(r => [esc(r.carrier_name), r.carrier_code, num(r.flights), pct(r.on_time_rate), pct(r.cancel_rate)]), [2, 3, 4]);
+  return out;
 }
+const total = (c, o) => group(c, () => "all", o).get("all") || {};
+const otp = a => div(a.on_time, a.completed);
+const cancelRate = a => div(a.cancelled, a.scheduled);
+const avgDelay = a => div(a.arr_delay_min_sum, a.completed);
+const causeSum = a => CAUSES.reduce((s, [k]) => s + (a[k] || 0), 0);
 
-function causes() {
-  const rows = D.causes, total = rows.reduce((a, r) => a + r.minutes, 0);
-  const W = widthOf("c-causes"), rowH = 44, left = 0, right = 46, H = rows.length * rowH;
-  const s = svg("c-causes", W, H, "Bar chart of arrival delay minutes by cause");
-  const max = Math.max(...rows.map(r => r.minutes)), sx = v => v / max * (W - left - right);
-  rows.forEach((r, i) => {
-    const y = i * rowH, g = el("g", { class: "row", tabindex: 0 }, s);
-    text(g, 0, y + 14, r.cause);
-    hbar(g, 0, y + 21, Math.max(2, sx(r.minutes)), 12);
-    text(g, sx(r.minutes) + 6, y + 31, pct(r.minutes / total, 0), { class: "strong" });
-    el("rect", { x: 0, y, width: W, height: rowH, class: "hit" }, g);
-    hover(g, `<b>${esc(r.cause)}</b><br>${num(r.minutes)} minutes<br>${pct(r.minutes / total)} of all delay minutes`);
-  });
-  table("t-causes", ["Cause", "Minutes", "Share"], rows.map(r => [esc(r.cause), num(r.minutes), pct(r.minutes / total)]), [1, 2]);
+// ---------- charts ----------
+const charts = {};
+const FONT = getComputedStyle(document.body).fontFamily;
+const BASE = { textStyle: { fontFamily: FONT, color: "#252423" }, animationDuration: 250,
+               tooltip: { confine: true, borderColor: "#c8c6c4", textStyle: { fontSize: 12, fontFamily: FONT } },
+               grid: { left: 8, right: 16, top: 26, bottom: 8, containLabel: true } };
+const LEGEND = { bottom: 0, icon: "rect", itemWidth: 10, itemHeight: 10, itemGap: 12, textStyle: { fontSize: 11 } };
+const axisCat = (data, extra = {}) => ({ type: "category", data, axisLine: { lineStyle: { color: "#8a8886" } },
+  axisTick: { alignWithLabel: true, lineStyle: { color: "#8a8886" } }, axisLabel: { color: "#605e5c" }, ...extra });
+const axisVal = (extra = {}) => ({ type: "value", axisLine: { show: true, lineStyle: { color: "#8a8886" } },
+  axisTick: { show: true, lineStyle: { color: "#8a8886" } }, splitLine: { lineStyle: { color: "#e1dfdd" } }, ...extra,
+  axisLabel: { color: "#605e5c", ...(extra.axisLabel || {}) } });
+const pctAxis = (digits = 0) => ({ formatter: v => (v * 100).toFixed(digits) + "%" });
+function chart(id, option) {
+  const el = document.getElementById(id);
+  if (!el || !el.offsetParent) return;
+  const c = charts[id] || (charts[id] = echarts.init(el, null, { renderer: "svg" }));
+  c.setOption({ ...BASE, ...option }, true);
 }
+addEventListener("resize", () => Object.values(charts).forEach(c => c.resize()));
 
-function months() {
-  const rows = D.months, W = widthOf("c-months"), H = 220, l = 44, r = 24, t = 20, b = 28;
-  const s = svg("c-months", W, H, "Line chart of on-time rate by month");
-  const vals = rows.map(d => d.on_time_rate);
-  const lo = Math.floor((Math.min(...vals) - 0.02) * 20) / 20, hi = Math.ceil((Math.max(...vals) + 0.02) * 20) / 20;
-  const sx = i => rows.length === 1 ? (l + W - r) / 2 : l + i * (W - l - r) / (rows.length - 1);
-  const sy = v => t + (hi - v) / (hi - lo) * (H - t - b);
-  for (let v = lo; v <= hi + 1e-9; v += 0.05) {
-    el("line", { x1: l, x2: W - r, y1: sy(v), y2: sy(v), class: "gridline" }, s);
-    text(s, l - 8, sy(v) + 4, pct(v, 0), { "text-anchor": "end", class: "muted" });
+// ---------- tables ----------
+const tables = {};
+function table(id, cols, rows, opts = {}) { tables[id] = { cols, rows, opts, sort: opts.sort || null }; drawTable(id); }
+function drawTable(id) {
+  const t = tables[id], { cols, opts } = t, rows = [...t.rows];
+  if (t.sort) {
+    const { i, dir } = t.sort, f = cols[i].value;
+    rows.sort((a, b) => { const x = f(a), y = f(b); if (x == null || y == null) return (x == null) - (y == null); return (x < y ? -1 : x > y ? 1 : 0) * dir; });
   }
-  el("path", { d: rows.map((d, i) => `${i ? "L" : "M"}${sx(i)},${sy(d.on_time_rate)}`).join(" "), class: "line" }, s);
-  const best = vals.indexOf(Math.max(...vals)), worst = vals.indexOf(Math.min(...vals));
-  rows.forEach((d, i) => {
-    const every = Math.ceil(rows.length / Math.max(2, Math.floor((W - l) / 80)));
-    if ((i % every === 0 && rows.length - 1 - i >= every) || i === rows.length - 1)
-      text(s, sx(i), H - 6, monthName(d.year_month), { "text-anchor": i === 0 ? "start" : i === rows.length - 1 ? "end" : "middle", class: "muted" });
-    el("circle", { cx: sx(i), cy: sy(d.on_time_rate), r: 5, class: "dot" }, s);
-    if (i === best || i === worst) text(s, sx(i), sy(d.on_time_rate) - 12, pct(d.on_time_rate), { "text-anchor": "middle", class: "strong" });
-  });
-  // crosshair hover: one wide band per month
-  const cross = el("line", { y1: t, y2: H - b, class: "axis", visibility: "hidden" }, s);
-  rows.forEach((d, i) => {
-    const w = rows.length === 1 ? W - l - r : (W - l - r) / (rows.length - 1);
-    const band = el("rect", { x: sx(i) - w / 2, y: t, width: w, height: H - t - b, class: "hit", tabindex: 0 }, s);
-    hover(band, `<b>${monthName(d.year_month)}</b><br>On time: ${pct(d.on_time_rate)}<br>Cancelled: ${pct(d.cancel_rate)}<br>${num(d.flights)} flights`);
-    const on = () => { cross.setAttribute("x1", sx(i)); cross.setAttribute("x2", sx(i)); cross.setAttribute("visibility", "visible"); };
-    band.addEventListener("pointerenter", on); band.addEventListener("focus", on);
-    band.addEventListener("pointerleave", () => cross.setAttribute("visibility", "hidden"));
-  });
-  table("t-months", ["Month", "Flights", "On time", "Cancelled"],
-    rows.map(d => [monthName(d.year_month), num(d.flights), pct(d.on_time_rate), pct(d.cancel_rate)]), [1, 2, 3]);
+  const head = cols.map((c, i) => `<th class="${c.num ? "n" : ""}" data-i="${i}" ${t.sort && t.sort.i === i ? `aria-sort="${t.sort.dir > 0 ? "ascending" : "descending"}"` : ""}>${esc(c.label)}</th>`).join("");
+  const body = rows.map(r => "<tr>" + cols.map(c => `<td class="${c.num ? "n" : ""} ${c.cls || ""}"${c.style ? ` style="${c.style(r)}"` : ""}>${c.html ? c.html(r) : esc(c.fmt ? c.fmt(c.value(r)) : c.value(r))}</td>`).join("") + "</tr>").join("");
+  const foot = opts.foot ? "<tfoot><tr>" + cols.map(c => `<td class="${c.num ? "n" : ""}">${opts.foot(c) ?? ""}</td>`).join("") + "</tr></tfoot>" : "";
+  const el = document.getElementById(id);
+  el.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table>`;
+  el.querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
+    const i = +th.dataset.i;
+    t.sort = t.sort && t.sort.i === i ? { i, dir: -t.sort.dir } : { i, dir: cols[i].num ? -1 : 1 };
+    drawTable(id);
+  }));
 }
-
-function heat() {
-  const hours = [...new Set(D.heat.map(d => d.hour))].sort((a, b) => a - b);
-  const ap = D.airports, W = widthOf("c-heat", 640), l = 54, t = 4, cw = (W - l) / hours.length, ch = 26, H = t + ap.length * ch + 24;
-  const s = svg("c-heat", W, H, "Heatmap of the share of delayed departures by airport and hour");
-  const vals = D.heat.map(d => d.dep_delayed_rate).filter(v => v != null);
-  const lo = Math.min(...vals), hi = Math.max(...vals);
-  const steps = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7"];
-  const color = v => `var(${steps[Math.min(steps.length - 1, Math.floor((v - lo) / (hi - lo + 1e-9) * steps.length))]})`;
-  const byKey = new Map(D.heat.map(d => [d.origin + "|" + d.hour, d]));
-  ap.forEach((a, i) => {
-    const y = t + i * ch;
-    text(s, l - 8, y + ch / 2 + 4, a, { "text-anchor": "end", class: "strong" });
-    hours.forEach((h, j) => {
-      const d = byKey.get(a + "|" + h); if (!d || d.dep_delayed_rate == null) return;
-      const c = el("rect", { x: l + j * cw, y, width: cw, height: ch, rx: 3, fill: color(d.dep_delayed_rate), class: "cell", tabindex: 0 }, s);
-      hover(c, `<b>${esc(d.city)} (${a})</b><br>${String(h).padStart(2, "0")}:00–${String(h).padStart(2, "0")}:59 departures<br>${pct(d.dep_delayed_rate)} left 15+ min late<br>${num(d.scheduled)} scheduled`);
-    });
-  });
-  hours.forEach((h, j) => { if (h % 2 === 1) text(s, l + j * cw + cw / 2, H - 6, `${String(h).padStart(2, "0")}:00`, { "text-anchor": "middle", class: "muted" }); });
-  document.getElementById("ramp").innerHTML = steps.map(v => `<i style="background:var(${v})"></i>`).join("");
-  document.getElementById("ramp-range").textContent = `${pct(lo, 0)} – ${pct(hi, 0)}`;
-  table("t-heat", ["Airport", ...hours.map(h => String(h).padStart(2, "0"))],
-    ap.map(a => [a, ...hours.map(h => { const d = byKey.get(a + "|" + h); return d ? pct(d.dep_delayed_rate, 0) : "–"; })]),
-    hours.map((_, i) => i + 1));
-}
-
-function routes() {
-  table("t-routes", ["Route", "Cities", "Flights", "On time", "Cancelled"],
-    D.routes.map(r => [`<b>${r.origin} → ${r.dest}</b>`, `${esc(r.origin_city)} → ${esc(r.dest_city)}`, num(r.flights), pct(r.on_time_rate), pct(r.cancel_rate)]),
-    [2, 3, 4]);
-}
-
-function quality() {
-  table("t-quality", ["Month", "Bronze rows", "Quarantined", "Share"],
-    D.quality.map(r => [monthName(r.month), num(r.bronze), num(r.quarantined), r.quarantined ? pct(r.quarantined / r.bronze, 4) : "0%"]), [1, 2, 3]);
-  const box = document.getElementById("examples");
-  box.innerHTML = D.examples.map(e => {
-    const r = e.raw_record;
-    const pick = ["FlightDate", "Reporting_Airline", "Flight_Number_Reporting_Airline", "Origin", "Dest", "CRSDepTime", "CRSArrTime", "CRSElapsedTime", "Distance", "Cancelled"]
-      .filter(k => k in r).map(k => `${k}: ${r[k] ?? "null"}`).join("\n");
-    return `<div class="stage"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${e.violations.map(v => `<span class="pill bad">${esc(v)}</span>`).join("")}<span class="pill">${monthName(e.month)} · row ${num(e.row_number)}</span></div><pre>${esc(pick)}</pre></div>`;
-  }).join("");
-}
-
-// theme switch: auto -> light -> dark
-const themes = ["auto", "light", "dark"], btn = document.getElementById("theme");
-let theme = "auto";
-try { theme = localStorage.getItem("ol-theme") || "auto"; } catch (e) {}
-function applyTheme() {
-  if (theme === "auto") document.documentElement.removeAttribute("data-theme");
-  else document.documentElement.setAttribute("data-theme", theme);
-  btn.textContent = "Theme: " + theme;
-}
-btn.addEventListener("click", () => {
-  theme = themes[(themes.indexOf(theme) + 1) % 3];
-  try { localStorage.setItem("ol-theme", theme); } catch (e) {}
-  applyTheme();
+document.addEventListener("click", e => {
+  const id = e.target && e.target.dataset && e.target.dataset.csv;
+  if (!id || !tables[id]) return;
+  const { cols, rows } = tables[id];
+  const cell = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const csv = [cols.map(c => cell(c.label)).join(","), ...rows.map(r => cols.map(c => cell(c.csv ? c.csv(r) : c.value(r))).join(","))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = id.replace("t-", "") + ".csv"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
-applyTheme();
+function shade(v, ref, span = 0.12) {
+  if (v == null || ref == null) return "";
+  const t = Math.max(-1, Math.min(1, (v - ref) / span));
+  return `background-color:${DIVERGE[Math.round((t + 1) / 2 * (DIVERGE.length - 1))]};${Math.abs(t) > .75 ? "color:#fff" : ""}`;
+}
 
-header(); routes(); quality();
-function charts() { carriers(); causes(); months(); heat(); }
-charts();
-let lastW = innerWidth, pending;
-addEventListener("resize", () => {
-  if (innerWidth === lastW) return;
-  lastW = innerWidth; clearTimeout(pending); pending = setTimeout(charts, 120);
+// ---------- KPI cards ----------
+function kpi(id, label, value, fmt, cur, prev, higherIsBetter, deltaFmt) {
+  let d = `<span class="flat">${monthShort(state.to)}: ${fmt(cur)}</span>`;
+  if (prev != null && cur != null) {
+    const x = cur - prev, cls = Math.abs(x) < 1e-12 || higherIsBetter == null ? "flat" : (x > 0) === higherIsBetter ? "good" : "bad";
+    d = `${monthShort(state.to)}: ${fmt(cur)} · <span class="${cls}">${x > 0 ? "▲" : x < 0 ? "▼" : "■"} ${deltaFmt(x, prev)}</span> vs ${monthShort(ALL_MONTHS[ALL_MONTHS.indexOf(state.to) - 1])}`;
+  }
+  document.getElementById(id).innerHTML = `<div class="l">${label}</div><div class="n">${fmt(value)}</div><div class="d">${d}</div>`;
+}
+const pts = x => (x > 0 ? "+" : "") + (x * 100).toFixed(1) + " pts";
+const rel = (x, p) => (x > 0 ? "+" : "") + (x / p * 100).toFixed(1) + "%";
+const absd = (x) => (x > 0 ? "+" : "") + x.toFixed(1);
+
+// ---------- pages ----------
+function renderSummary() {
+  const t = total(S);
+  const i = ALL_MONTHS.indexOf(state.to), prevM = i > 0 ? ALL_MONTHS[i - 1] : null;
+  const cur = total(S, { from: state.to, to: state.to }), pv = prevM ? total(S, { from: prevM, to: prevM }) : null;
+  const P = f => pv && pv.scheduled ? f(pv) : null;
+  kpi("k-flights", "Scheduled flights", t.scheduled, fmtInt, cur.scheduled, P(a => a.scheduled), null, rel);
+  kpi("k-otp", "On-time arrival", otp(t), fmtPct, otp(cur), P(otp), true, pts);
+  kpi("k-cancel", "Cancellation rate", cancelRate(t), fmtPct2, cancelRate(cur), P(cancelRate), false, pts);
+  kpi("k-divert", "Diversion rate", div(t.diverted, t.scheduled), fmtPct2, div(cur.diverted, cur.scheduled), P(a => div(a.diverted, a.scheduled)), false, pts);
+  kpi("k-delay", "Avg arrival delay, min", avgDelay(t), fmt1, avgDelay(cur), P(avgDelay), false, absd);
+  kpi("k-late", "Arrived 15+ min late", div(t.arr_delayed, t.completed), fmtPct, div(cur.arr_delayed, cur.completed), P(a => div(a.arr_delayed, a.completed)), false, pts);
+
+  const byMonth = group(S, r => r[S.ix.year_month]);
+  const months = [...byMonth.keys()].sort();
+  chart("ch-volume", {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: fmtInt },
+    xAxis: axisCat(months.map(monthShort)), yAxis: axisVal({ axisLabel: { formatter: fmtK } }),
+    series: [{ type: "bar", name: "Scheduled flights", data: months.map(m => byMonth.get(m).scheduled), itemStyle: { color: CAT[0] }, barMaxWidth: 46,
+               label: { show: true, position: "top", formatter: p => fmtK(p.value), color: "#252423", fontSize: 11 } }],
+  });
+  const avg = otp(t);
+  chart("ch-otp", {
+    tooltip: { trigger: "axis", valueFormatter: v => fmtPct(v) },
+    xAxis: axisCat(months.map(monthShort)),
+    yAxis: axisVal({ min: v => Math.floor(v.min * 20 - 1) / 20, max: v => Math.min(1, Math.ceil(v.max * 20 + 1) / 20), axisLabel: pctAxis() }),
+    series: [{ type: "line", name: "On-time rate", data: months.map(m => otp(byMonth.get(m))), symbol: "circle", symbolSize: 7,
+               lineStyle: { width: 2, color: CAT[0] }, itemStyle: { color: CAT[0] },
+               label: { show: true, position: "top", formatter: p => fmtPct(p.value), fontSize: 11, color: "#252423" },
+               markLine: { silent: true, symbol: "none", lineStyle: { type: "dashed", color: "#8a8886" },
+                           label: { formatter: "Average " + fmtPct(avg), color: "#605e5c", position: "insideEndBottom" }, data: [{ yAxis: avg }] } }],
+  });
+  chart("ch-causes", {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: v => fmtInt(v * 1000) + " min" },
+    legend: LEGEND, grid: { ...BASE.grid, bottom: 48 },
+    xAxis: axisCat(months.map(monthShort)), yAxis: axisVal({ axisLabel: { formatter: v => v ? fmtInt(v) + "K" : "0" } }),
+    series: CAUSES.map(([k, name], j) => ({ type: "bar", stack: "c", name, data: months.map(m => byMonth.get(m)[k] / 1000),
+      itemStyle: { color: CAT[j], borderColor: "#fff", borderWidth: 1 }, barMaxWidth: 46, emphasis: { focus: "series" } })),
+  });
+  renderMap(t);
+}
+
+let usMap = null, albers = null;
+async function loadMap() {
+  if (usMap !== null) return usMap;
+  try {
+    const topo = await (await fetch("https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-10m.json")).json();
+    usMap = topojson.feature(topo, topo.objects.states);
+    echarts.registerMap("US", usMap);
+    albers = d3.geoAlbersUsa();
+  } catch (e) { usMap = false; }
+  return usMap;
+}
+async function renderMap(t) {
+  if (!(await loadMap())) { document.getElementById("ch-map").innerHTML = "<p class='foot'>The map needs a network connection to load the state outlines.</p>"; return; }
+  const by = group(S, r => r[S.ix.origin]), avg = otp(t), pts = [], skipped = [];
+  for (const [code, a] of by) {
+    const ap = AIRPORT[code];
+    if (!ap || ap.lat == null || !albers([ap.lon, ap.lat])) { skipped.push(code); continue; }
+    pts.push({ name: code, value: [ap.lon, ap.lat, a.scheduled, otp(a)], ap, a });
+  }
+  pts.sort((x, y) => y.value[2] - x.value[2]);
+  const max = Math.max(1, ...pts.map(p => p.value[2]));
+  document.getElementById("map-foot").textContent = skipped.length ? `Not on the map (outside the projection): ${skipped.sort().join(", ")}. Drag to pan, scroll to zoom.` : "Drag to pan, scroll to zoom.";
+  chart("ch-map", {
+    tooltip: { trigger: "item", formatter: p => p.data ? `<b>${p.data.name}</b> · ${esc(p.data.ap.airport_name || "")}<br>${esc(p.data.ap.city)}<br>Scheduled departures: ${fmtInt(p.data.value[2])}<br>On-time arrival: ${fmtPct(p.data.value[3])}<br>Cancelled: ${fmtPct2(cancelRate(p.data.a))}` : "" },
+    geo: { map: "US", roam: true, projection: { project: p => albers(p), unproject: p => albers.invert(p) },
+           aspectScale: 1, itemStyle: { areaColor: "#f3f2f1", borderColor: "#c8c6c4", borderWidth: .6 }, emphasis: { disabled: true }, select: { disabled: true }, top: 4, bottom: 40 },
+    visualMap: { type: "continuous", dimension: 3, min: Math.max(0, avg - 0.12), max: Math.min(1, avg + 0.12), calculable: false,
+                 inRange: { color: DIVERGE }, orient: "horizontal", left: 0, bottom: 0, itemWidth: 10, itemHeight: 150,
+                 text: ["Better", "Worse"], textStyle: { fontSize: 11, color: "#605e5c" }, formatter: v => fmtPct(v, 0) },
+    series: [{ type: "scatter", coordinateSystem: "geo", data: pts, symbolSize: v => 3 + Math.sqrt(v[2] / max) * 26,
+               itemStyle: { borderColor: "#fff", borderWidth: .6, opacity: .92 }, emphasis: { itemStyle: { borderColor: "#252423", borderWidth: 1 } } }],
+  });
+}
+
+function carrierList() {
+  return [...group(S, r => r[S.ix.carrier_code]).entries()].map(([code, a]) => ({ code, name: cname(code), a })).filter(x => x.a.scheduled);
+}
+function renderCarriers() {
+  const t = total(S), avg = otp(t), list = carrierList();
+  const byOtp = [...list].sort((x, y) => otp(x.a) - otp(y.a));
+  chart("ch-carrier-otp", {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: v => fmtPct(v) },
+    grid: { ...BASE.grid, right: 56 },
+    yAxis: axisCat(byOtp.map(x => x.name)),
+    xAxis: axisVal({ min: v => Math.max(0, Math.floor(v.min * 10 - .5) / 10), max: 1, axisLabel: pctAxis() }),
+    series: [{ type: "bar", name: "On-time rate", data: byOtp.map(x => otp(x.a)), itemStyle: { color: CAT[0] }, barMaxWidth: 18,
+               label: { show: true, position: "right", formatter: p => fmtPct(p.value), fontSize: 11, color: "#252423" },
+               markLine: { silent: true, symbol: "none", lineStyle: { type: "dashed", color: "#252423" },
+                           label: { formatter: "Avg\n" + fmtPct(avg), color: "#252423", fontSize: 11 }, data: [{ xAxis: avg }] } }],
+  });
+  const byCancel = [...list].sort((x, y) => cancelRate(x.a) - cancelRate(y.a));
+  chart("ch-carrier-cancel", {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: fmtPct2 },
+    legend: LEGEND, grid: { ...BASE.grid, bottom: 40 },
+    yAxis: axisCat(byCancel.map(x => x.name)), xAxis: axisVal({ axisLabel: pctAxis(1) }),
+    series: CANCELS.map(([k, name], j) => ({ type: "bar", stack: "c", name, data: byCancel.map(x => div(x.a[k], x.a.scheduled)),
+      itemStyle: { color: CAT[j], borderColor: "#fff", borderWidth: 1 }, barMaxWidth: 18 })),
+  });
+  const share = a => div(a.scheduled, t.scheduled), maxShare = Math.max(...list.map(x => share(x.a)));
+  const foot = { "Carrier": "All selected", "Scheduled": fmtInt(t.scheduled), "Share": "100.0%", "On-time": fmtPct(avg),
+    "Cancelled": fmtPct2(cancelRate(t)), "Diverted": fmtPct2(div(t.diverted, t.scheduled)), "Avg arr. delay (min)": fmt1(avgDelay(t)),
+    "Delay min per flight": fmt1(div(causeSum(t), t.scheduled)), "Avg taxi-out (min)": fmt1(div(t.taxi_out_min_sum, t.taxi_out_n)) };
+  table("t-scorecard", [
+    { label: "Carrier", value: x => x.name, html: x => `${esc(x.name)} <span class="tag">${x.code}</span>` },
+    { label: "Group", value: x => (CARRIER[x.code] || {}).carrier_group || "–" },
+    { label: "Scheduled", num: 1, value: x => x.a.scheduled, fmt: fmtInt },
+    { label: "Share", num: 1, value: x => share(x.a), html: x => `<span class="bar" style="width:${Math.round(share(x.a) / maxShare * 60)}px"></span>${fmtPct(share(x.a))}`, csv: x => share(x.a).toFixed(4) },
+    { label: "On-time", num: 1, value: x => otp(x.a), fmt: fmtPct, style: x => shade(otp(x.a), avg) },
+    { label: "Cancelled", num: 1, value: x => cancelRate(x.a), fmt: fmtPct2 },
+    { label: "Diverted", num: 1, value: x => div(x.a.diverted, x.a.scheduled), fmt: fmtPct2 },
+    { label: "Avg arr. delay (min)", num: 1, value: x => avgDelay(x.a), fmt: fmt1 },
+    { label: "Delay min per flight", num: 1, value: x => div(causeSum(x.a), x.a.scheduled), fmt: fmt1 },
+    { label: "Avg taxi-out (min)", num: 1, value: x => div(x.a.taxi_out_min_sum, x.a.taxi_out_n), fmt: fmt1 },
+  ], list, { sort: { i: 2, dir: -1 }, foot: c => foot[c.label] });
+
+  const cm = group(S, r => r[S.ix.carrier_code] + "|" + r[S.ix.year_month]);
+  const bm = group(S, r => r[S.ix.year_month]), months = [...bm.keys()].sort();
+  table("t-matrix", [
+    { label: "Carrier", value: x => x.name },
+    ...months.map(m => ({ label: monthShort(m), num: 1, value: x => otp(cm.get(x.code + "|" + m) || {}), fmt: fmtPct, style: x => shade(otp(cm.get(x.code + "|" + m) || {}), avg) })),
+    { label: "Total", num: 1, value: x => otp(x.a), fmt: fmtPct, style: x => shade(otp(x.a), avg) },
+  ], list, { sort: { i: months.length + 1, dir: -1 },
+             foot: c => c.label === "Carrier" ? "All selected" : c.label === "Total" ? fmtPct(avg) : fmtPct(otp(bm.get(months.find(m => monthShort(m) === c.label)) || {})) });
+}
+
+function renderAirports() {
+  const t = total(S), avg = otp(t);
+  const list = [...group(S, r => r[S.ix.origin]).entries()].map(([code, a]) => ({ code, ap: AIRPORT[code] || {}, a }))
+    .sort((x, y) => y.a.scheduled - x.a.scheduled).slice(0, 50);
+  const max = list.length ? list[0].a.scheduled : 1;
+  table("t-airports", [
+    { label: "Airport", value: x => x.code, html: x => `<b>${x.code}</b> <span style="color:#605e5c">${esc(x.ap.city || "")}</span>`, csv: x => `${x.code} ${x.ap.city || ""}` },
+    { label: "Departures", num: 1, value: x => x.a.scheduled, html: x => `<span class="bar" style="width:${Math.round(x.a.scheduled / max * 40)}px"></span>${fmtInt(x.a.scheduled)}`, csv: x => x.a.scheduled },
+    { label: "On-time arr.", num: 1, value: x => otp(x.a), fmt: fmtPct, style: x => shade(otp(x.a), avg) },
+    { label: "Dep. delayed 15+", num: 1, value: x => div(x.a.dep_delayed, x.a.departed), fmt: fmtPct },
+    { label: "Cancelled", num: 1, value: x => cancelRate(x.a), fmt: fmtPct2 },
+  ], list, { sort: { i: 1, dir: -1 } });
+
+  const h = group(H, r => r[H.ix.iso_day_of_week] + "|" + r[H.ix.hour], { noAirport: true });
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], hours = [];
+  for (let x = 5; x <= 23; x++) hours.push(x);
+  const cells = [];
+  days.forEach((_, di) => hours.forEach((hr, hi) => { const a = h.get((di + 1) + "|" + hr); if (a && a.departed >= 30) cells.push([hi, di, div(a.dep_delayed, a.departed), a.departed]); }));
+  const vals = cells.map(c => c[2]);
+  chart("ch-hour", {
+    tooltip: { formatter: p => `${days[p.value[1]]} ${String(hours[p.value[0]]).padStart(2, "0")}:00–:59<br>Delayed 15+ min: <b>${fmtPct(p.value[2])}</b><br>Departures: ${fmtInt(p.value[3])}` },
+    grid: { left: 8, right: 8, top: 8, bottom: 56, containLabel: true },
+    xAxis: axisCat(hours.map(x => String(x).padStart(2, "0")), { name: "hour", nameLocation: "middle", nameGap: 24, nameTextStyle: { color: "#605e5c" } }),
+    yAxis: axisCat(days, { inverse: true }),
+    visualMap: { dimension: 2, min: vals.length ? Math.min(...vals) : 0, max: vals.length ? Math.max(...vals) : 1, calculable: false, orient: "horizontal", left: "center", bottom: 0,
+                 inRange: { color: SEQ }, itemWidth: 10, itemHeight: 160, text: [fmtPct(vals.length ? Math.max(...vals) : 1, 0) + " delayed", fmtPct(vals.length ? Math.min(...vals) : 0, 0)], textStyle: { fontSize: 11, color: "#605e5c" } },
+    series: [{ type: "heatmap", data: cells, itemStyle: { borderColor: "#fff", borderWidth: 1 } }],
+  });
+
+  const rt = group(R, r => r[R.ix.origin] + "-" + r[R.ix.dest]);
+  const carriersOn = new Map();
+  for (const r of R.rows) if (keep(R, r)) {
+    const k = r[R.ix.origin] + "-" + r[R.ix.dest];
+    if (!carriersOn.has(k)) carriersOn.set(k, new Set());
+    carriersOn.get(k).add(r[R.ix.carrier_code]);
+  }
+  const routes = [...rt.entries()].map(([k, a]) => ({ k, a, c: [...(carriersOn.get(k) || [])].sort() })).sort((x, y) => y.a.scheduled - x.a.scheduled).slice(0, 40);
+  document.getElementById("routes-sub").textContent = `top 40 for the selection, out of the ${D.meta.top_routes} busiest airport pairs`;
+  table("t-routes", [
+    { label: "Route", value: x => x.k, html: x => `<b>${x.k.replace("-", " → ")}</b>` },
+    { label: "Cities", value: x => `${(AIRPORT[x.a.origin] || {}).city || ""} → ${(AIRPORT[x.a.dest] || {}).city || ""}` },
+    { label: "Distance (mi)", num: 1, value: x => x.a.distance_mi / x.a._n, fmt: fmtInt },
+    { label: "Carriers", value: x => x.c.join(" "), html: x => x.c.map(c => `<span class="tag">${c}</span>`).join("") },
+    { label: "Scheduled", num: 1, value: x => x.a.scheduled, fmt: fmtInt },
+    { label: "On-time", num: 1, value: x => otp(x.a), fmt: fmtPct, style: x => shade(otp(x.a), avg) },
+    { label: "Cancelled", num: 1, value: x => cancelRate(x.a), fmt: fmtPct2 },
+    { label: "Avg arr. delay (min)", num: 1, value: x => avgDelay(x.a), fmt: fmt1 },
+  ], routes, { sort: { i: 4, dir: -1 } });
+}
+
+function renderDelays() {
+  const t = total(S);
+  chart("ch-dist", {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: fmtInt },
+    grid: { ...BASE.grid, bottom: 32 },
+    xAxis: axisCat(BUCKETS.map(b => b[1]), { name: "minutes against schedule", nameLocation: "middle", nameGap: 28, nameTextStyle: { color: "#605e5c" }, axisLabel: { interval: 0, fontSize: 10.5, hideOverlap: false } }),
+    yAxis: axisVal({ axisLabel: { formatter: fmtK } }),
+    series: [{ type: "bar", name: "Completed flights", barCategoryGap: "10%",
+               data: BUCKETS.map(([k], i) => ({ value: t[k], itemStyle: { color: i < 3 ? CAT[0] : CAT[1] } })),
+               label: { show: true, position: "top", fontSize: 11, color: "#252423", formatter: p => fmtPct(div(p.value, t.completed)) } }],
+  });
+  chart("ch-pie", {
+    tooltip: { trigger: "item", formatter: p => `${p.name}<br>${fmtInt(p.value)} min (${p.percent}%)` },
+    legend: { orient: "vertical", right: 0, top: "middle", icon: "rect", itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 11 } },
+    series: [{ type: "pie", radius: ["36%", "66%"], center: ["34%", "52%"], startAngle: 90, minAngle: 2,
+               itemStyle: { borderColor: "#fff", borderWidth: 2 },
+               label: { formatter: p => p.percent >= 2 ? p.percent.toFixed(1) + "%" : "", fontSize: 11, color: "#252423" }, labelLine: { length: 6, length2: 6 },
+               data: CAUSES.map(([k, name], j) => ({ name, value: t[k], itemStyle: { color: CAT[j] } })) }],
+  });
+  const list = carrierList().filter(x => x.a.arr_delayed).sort((x, y) => causeSum(x.a) / x.a.arr_delayed - causeSum(y.a) / y.a.arr_delayed);
+  chart("ch-cause-carrier", {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: v => fmt1(v) + " min" },
+    legend: LEGEND, grid: { ...BASE.grid, bottom: 40, right: 28 },
+    yAxis: axisCat(list.map(x => x.name)), xAxis: axisVal({ axisLabel: { formatter: v => v + " min" } }),
+    series: CAUSES.map(([k, name], j) => ({ type: "bar", stack: "c", name, data: list.map(x => div(x.a[k], x.a.arr_delayed)),
+      itemStyle: { color: CAT[j], borderColor: "#fff", borderWidth: 1 }, barMaxWidth: 18 })),
+  });
+  const bm = group(S, r => r[S.ix.year_month]), months = [...bm.keys()].sort();
+  chart("ch-cancel-month", {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: fmtInt },
+    legend: LEGEND, grid: { ...BASE.grid, bottom: 40 },
+    xAxis: axisCat(months.map(monthShort)), yAxis: axisVal({ axisLabel: { formatter: fmtK } }),
+    series: CANCELS.map(([k, name], j) => ({ type: "bar", stack: "c", name, data: months.map(m => bm.get(m)[k]),
+      itemStyle: { color: CAT[j], borderColor: "#fff", borderWidth: 1 }, barMaxWidth: 40 })),
+  });
+}
+
+function renderOps() {
+  const O = D.ops, loads = O.loads;
+  const rows = loads.reduce((s, l) => s + l.bronze_rows, 0), q = loads.reduce((s, l) => s + l.quarantined_rows, 0);
+  const failing = O.checks.filter(c => c.failures).length;
+  const card = (id, l, n, d) => { document.getElementById(id).innerHTML = `<div class="l">${l}</div><div class="n">${n}</div><div class="d">${d}</div>`; };
+  card("o-loads", "Months loaded", loads.length, `${monthLabel(loads[0].month)} – ${monthLabel(loads.at(-1).month)}`);
+  card("o-rows", "Source rows", fmtInt(rows), `${fmtBytes(loads.reduce((s, l) => s + (l.file_bytes || 0), 0))} of zipped CSV landed`);
+  card("o-quar", "Rows quarantined", fmtInt(q), `${fmtPct(q / rows, 4)} of source rows · limit ${fmtPct(D.meta.contract.budget)} a month`);
+  card("o-checks", "Contract checks", D.meta.contract.checks, `${esc(D.meta.contract.name)} v${esc(D.meta.contract.version)} · <span class="${failing ? "bad" : "good"}">${failing} with failures</span>`);
+
+  const recon = l => l.silver_rows != null && l.bronze_rows === l.silver_rows + l.quarantined_rows && l.fact_rows === l.silver_rows;
+  table("t-loads", [
+    { label: "Month", value: l => l.month, fmt: monthLabel },
+    { label: "File", num: 1, value: l => l.file_bytes, fmt: fmtBytes },
+    { label: "Download (s)", num: 1, value: l => l.download_seconds, fmt: v => v == null ? "–" : v.toFixed(1) },
+    { label: "Bronze", num: 1, value: l => l.bronze_rows, fmt: fmtInt },
+    { label: "Silver", num: 1, value: l => l.silver_rows, fmt: fmtInt },
+    { label: "Quarantined", num: 1, value: l => l.quarantined_rows, fmt: fmtInt },
+    { label: "Fact", num: 1, value: l => l.fact_rows, fmt: fmtInt },
+    { label: "Reconciled", value: l => recon(l) ? "Yes" : "No", html: l => recon(l) ? "<span class='ok'>Yes</span>" : "<span class='fail'>No</span>" },
+    { label: "Batch", value: l => l.batch_id, cls: "mono" },
+    { label: "SHA-256", value: l => l.sha256, cls: "mono" },
+  ], loads, { sort: { i: 0, dir: 1 } });
+
+  const stage = [["Download", l => l.download_seconds], ["Bronze", l => l.bronze_ms != null ? l.bronze_ms / 1000 : null], ["Silver", l => l.silver_ms != null ? l.silver_ms / 1000 : null]];
+  chart("ch-stage", {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: v => v == null ? "–" : v.toFixed(1) + " s" },
+    legend: LEGEND, grid: { ...BASE.grid, bottom: 36 },
+    xAxis: axisCat(loads.map(l => monthShort(l.month))), yAxis: axisVal({ axisLabel: { formatter: v => v + " s" } }),
+    series: stage.map(([name, f], j) => ({ type: "bar", stack: "s", name, data: loads.map(f), itemStyle: { color: CAT[j], borderColor: "#fff", borderWidth: 1 }, barMaxWidth: 34 })),
+  });
+
+  table("t-runs", [
+    { label: "Started (UTC)", value: r => r.started_at },
+    { label: "Run", value: r => r.run_id, cls: "mono" },
+    { label: "Stage", value: r => r.stage },
+    { label: "Month", value: r => r.source_month || "" },
+    { label: "Status", value: r => r.status, html: r => r.status === "succeeded" ? "<span class='ok'>Succeeded</span>" : `<span class='fail'>${esc(r.status)}</span>` },
+    { label: "Duration", num: 1, value: r => r.duration_ms, fmt: v => v == null ? "" : (v / 1000).toFixed(2) + " s" },
+    { label: "Rows in", num: 1, value: r => r.rows_in, fmt: v => v == null ? "" : fmtInt(v) },
+    { label: "Rows out", num: 1, value: r => r.rows_out, fmt: v => v == null ? "" : fmtInt(v) },
+    { label: "Quarantined", num: 1, value: r => r.rows_quarantined, fmt: v => v == null ? "" : fmtInt(v) },
+    { label: "Detail", value: r => r.detail || "", html: r => `<span style="color:#605e5c">${esc((r.detail || "").slice(0, 90))}${(r.detail || "").length > 90 ? "…" : ""}</span>` },
+  ], O.runs || []);
+
+  const sum = k => O.inventory.reduce((s, r) => s + r[k], 0);
+  table("t-inventory", [
+    { label: "Table", value: r => r.table, cls: "mono" },
+    { label: "Layer", value: r => r.layer },
+    { label: "Rows", num: 1, value: r => r.rows, fmt: fmtInt },
+    { label: "Columns", num: 1, value: r => r.columns, fmt: fmtInt },
+    { label: "Data files", num: 1, value: r => r.data_files, fmt: fmtInt },
+    { label: "Size", num: 1, value: r => r.bytes, fmt: fmtBytes },
+    { label: "Snapshots", num: 1, value: r => r.snapshots, fmt: fmtInt },
+    { label: "Partitioning", value: r => r.partitioning, cls: "mono" },
+    { label: "Last commit (UTC)", value: r => r.updated_at },
+  ], O.inventory, { sort: { i: 0, dir: 1 }, foot: c => ({ Table: `${O.inventory.length} tables`, Rows: fmtInt(sum("rows")), "Data files": fmtInt(sum("data_files")), Size: fmtBytes(sum("bytes")), Snapshots: fmtInt(sum("snapshots")) })[c.label] });
+
+  document.getElementById("checks-sub").textContent = `${O.checks.length} checks generated from the contract; ${O.checks.length - failing} passed on every row`;
+  table("t-checks", [
+    { label: "Check", value: c => c.check, cls: "mono" },
+    { label: "Type", value: c => c.kind },
+    { label: "Rows failed", num: 1, value: c => c.failures, fmt: fmtInt },
+    { label: "Status", value: c => c.failures ? "Failed" : "Passed", html: c => c.failures ? "<span class='fail'>Failed</span>" : "<span class='ok'>Passed</span>" },
+  ], O.checks, { sort: { i: 2, dir: -1 } });
+
+  const pick = ["FlightDate", "Reporting_Airline", "Flight_Number_Reporting_Airline", "Origin", "Dest", "CRSDepTime", "CRSArrTime", "CRSElapsedTime", "Distance", "Cancelled"];
+  table("t-quarantine", [
+    { label: "Month", value: x => x.month },
+    { label: "Row", num: 1, value: x => x.row_number, fmt: fmtInt },
+    { label: "Failed checks", value: x => x.violations.join(" "), html: x => x.violations.map(v => `<span class="tag bad mono">${esc(v)}</span>`).join("") },
+    { label: "Raw record (selected fields)", value: x => JSON.stringify(x.raw_record), html: x => `<div class="rec mono">${pick.filter(k => k in x.raw_record).map(k => `${k}=${esc(x.raw_record[k] ?? "null")}`).join(" · ")}</div>` },
+  ], O.quarantine);
+
+  table("t-snapshots", [
+    { label: "Committed (UTC)", value: s => s.committed_at },
+    { label: "Table", value: s => s.table, cls: "mono" },
+    { label: "Operation", value: s => s.operation },
+    { label: "Month", value: s => s.source_month || "" },
+    { label: "Added", num: 1, value: s => s.added, fmt: fmtInt },
+    { label: "Deleted", num: 1, value: s => s.deleted, fmt: fmtInt },
+    { label: "Total rows", num: 1, value: s => s.total, fmt: fmtInt },
+    { label: "Batch", value: s => s.batch_id || "", cls: "mono" },
+    { label: "Snapshot id", value: s => s.snapshot_id, cls: "mono" },
+  ], O.snapshots);
+}
+
+// ---------- navigation & filters ----------
+const PAGES = [["p-summary", renderSummary], ["p-carriers", renderCarriers], ["p-airports", renderAirports], ["p-delays", renderDelays], ["p-ops", renderOps]];
+let current = 0;
+const tabs = document.getElementById("tabs");
+PAGES.forEach(([id], i) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.setAttribute("role", "tab"); b.id = "tab-" + id; b.textContent = document.getElementById(id).dataset.title;
+  b.addEventListener("click", () => show(i)); tabs.appendChild(b);
 });
+function filterNote() {
+  const n = [state.from !== ALL_MONTHS[0] || state.to !== ALL_MONTHS.at(-1), state.carrier !== "ALL", state.st !== "ALL", state.airport !== "ALL"].filter(Boolean).length;
+  return n ? `${n} filter${n > 1 ? "s" : ""} applied` : "No filters applied";
+}
+function show(i) {
+  current = i;
+  PAGES.forEach(([id], j) => { document.getElementById(id).classList.toggle("on", i === j); document.getElementById("tab-" + id).setAttribute("aria-selected", String(i === j)); });
+  const ops = PAGES[i][0] === "p-ops";
+  document.querySelectorAll("#filterbar select, #filterbar button").forEach(el => { el.disabled = ops; });
+  document.getElementById("f-note").textContent = ops ? "Filters don't apply to this page." : filterNote();
+  document.getElementById("pg").textContent = `Page ${i + 1} of ${PAGES.length}`;
+  try { history.replaceState(null, "", "#" + PAGES[i][0].slice(2)); } catch (e) {}
+  PAGES[i][1]();
+  requestAnimationFrame(() => Object.values(charts).forEach(c => c.resize()));
+}
+const sel = (id, opts, value) => { const s = document.getElementById(id); s.innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join(""); s.value = value; };
+function airportOptions() {
+  const by = group(S, r => r[S.ix.origin], { from: ALL_MONTHS[0], to: ALL_MONTHS.at(-1) });
+  const codes = [...by.entries()].filter(([c]) => state.st === "ALL" || (AIRPORT[c] || {}).state === state.st).sort((a, b) => b[1].scheduled - a[1].scheduled).map(([c]) => c);
+  if (state.airport !== "ALL" && !codes.includes(state.airport)) state.airport = "ALL";
+  return [["ALL", "All airports"], ...codes.map(c => [c, `${c} · ${(AIRPORT[c] || {}).city || ""}`])];
+}
+function buildFilters() {
+  sel("f-from", ALL_MONTHS.map(m => [m, monthLabel(m)]), state.from);
+  sel("f-to", ALL_MONTHS.map(m => [m, monthLabel(m)]), state.to);
+  sel("f-carrier", [["ALL", "All carriers"], ...D.carriers.map(c => [c.carrier_code, `${c.carrier_name} (${c.carrier_code})`])], state.carrier);
+  sel("f-state", [["ALL", "All states"], ...STATES.map(s => [s, s])], state.st);
+  sel("f-airport", airportOptions(), state.airport);
+}
+function onFilter(e) {
+  state.from = document.getElementById("f-from").value;
+  state.to = document.getElementById("f-to").value;
+  if (state.from > state.to) [state.from, state.to] = [state.to, state.from];
+  state.carrier = document.getElementById("f-carrier").value;
+  if (e.target.id === "f-state") { state.st = e.target.value; state.airport = "ALL"; }
+  else state.airport = document.getElementById("f-airport").value;
+  buildFilters(); show(current);
+}
+["f-from", "f-to", "f-carrier", "f-state", "f-airport"].forEach(id => document.getElementById(id).addEventListener("change", onFilter));
+document.getElementById("f-reset").addEventListener("click", () => {
+  Object.assign(state, { from: ALL_MONTHS[0], to: ALL_MONTHS.at(-1), carrier: "ALL", st: "ALL", airport: "ALL" });
+  buildFilters(); show(current);
+});
+
+document.getElementById("hdr").innerHTML = `Data through <b>${monthLabel(ALL_MONTHS.at(-1))}</b> · ${ALL_MONTHS.length} months<br>Refreshed ${esc(D.meta.built_at)}`;
+buildFilters();
+const start = PAGES.findIndex(([id]) => "#" + id.slice(2) === location.hash);
+show(start >= 0 ? start : 0);
 </script>
 </body>
 </html>
