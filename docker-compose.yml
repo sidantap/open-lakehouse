@@ -1,0 +1,11 @@
+# docker compose up            -> Dagster UI at http://localhost:3000
+# docker compose run --rm lakehouse lakehouse run --months 2025-01:2025-03
+# docker compose run --rm lakehouse lakehouse sql "SELECT * FROM gold_mart_carrier_month"
+services:
+  lakehouse:
+    build: .
+    image: open-lakehouse:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./lakehouse_data:/data      # landing zips, Iceberg warehouse and catalog stay on your disk

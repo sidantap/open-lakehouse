@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen --all-extras
+      - name: Lint
+        run: uv run ruff check src tests && uv run ruff format --check src tests
+      - name: Test
+        run: uv run pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t open-lakehouse .
+      - name: Smoke test the CLI and the Dagster definitions
+        run: |
+          docker run --rm open-lakehouse lakehouse --help
+          docker run --rm open-lakehouse dagster definitions validate -m lakehouse.definitions

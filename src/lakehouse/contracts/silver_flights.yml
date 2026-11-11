@@ -1,0 +1,89 @@
+# Data contract for silver.flights.
+#
+# The contract is the single source of truth for the silver schema. The pipeline generates the
+# typed SELECT and every quality check from this file, so the schema, the checks and these docs
+# can't drift apart. A row that breaks any check goes to silver.flights_quarantine with the names
+# of the checks it failed; it is never silently dropped or "fixed".
+#
+# Bump `version` on any change. Removing a column or tightening a check is a breaking change.
+
+name: silver.flights
+version: 1.0.0
+owner: data-engineering
+grain: One row per scheduled flight leg, as reported by the operating carrier.
+source: BTS Reporting Carrier On-Time Performance (1987-present), monthly zip
+primary_key: [flight_date, carrier_code, flight_number, origin, dest, crs_dep_hhmm]
+
+columns:
+  flight_date:            {source: FlightDate, type: date, required: true}
+  carrier_code:           {source: Reporting_Airline, type: string, required: true, pattern: "^[A-Z0-9]{2}$"}
+  carrier_dot_id:         {source: DOT_ID_Reporting_Airline, type: int}
+  tail_number:            {source: Tail_Number, type: string}
+  flight_number:          {source: Flight_Number_Reporting_Airline, type: int, required: true, min: 1, max: 9999}
+
+  origin_airport_id:      {source: OriginAirportID, type: int, required: true}
+  origin:                 {source: Origin, type: string, required: true, pattern: "^[A-Z0-9]{3}$"}
+  origin_city:            {source: OriginCityName, type: string, required: true}
+  origin_state:           {source: OriginState, type: string, pattern: "^[A-Z]{2}$"}
+  origin_state_name:      {source: OriginStateName, type: string}
+  dest_airport_id:        {source: DestAirportID, type: int, required: true}
+  dest:                   {source: Dest, type: string, required: true, pattern: "^[A-Z0-9]{3}$"}
+  dest_city:              {source: DestCityName, type: string, required: true}
+  dest_state:             {source: DestState, type: string, pattern: "^[A-Z]{2}$"}
+  dest_state_name:        {source: DestStateName, type: string}
+
+  # Local clock times as hhmm strings; BTS writes midnight as 2400.
+  crs_dep_hhmm:           {source: CRSDepTime, type: string, required: true, pattern: "^(([01][0-9]|2[0-3])[0-5][0-9]|2400)$"}
+  dep_hhmm:               {source: DepTime, type: string, pattern: "^(([01][0-9]|2[0-3])[0-5][0-9]|2400)$"}
+  crs_arr_hhmm:           {source: CRSArrTime, type: string, required: true, pattern: "^(([01][0-9]|2[0-3])[0-5][0-9]|2400)$"}
+  arr_hhmm:               {source: ArrTime, type: string, pattern: "^(([01][0-9]|2[0-3])[0-5][0-9]|2400)$"}
+
+  dep_delay_min:          {source: DepDelay, type: int, min: -240, max: 4320}
+  arr_delay_min:          {source: ArrDelay, type: int, min: -240, max: 4320}
+  arr_delay_late_min:     {source: ArrDelayMinutes, type: int, min: 0, max: 4320}
+  dep_del15:              {source: DepDel15, type: bool}
+  arr_del15:              {source: ArrDel15, type: bool}
+  taxi_out_min:           {source: TaxiOut, type: int, min: 0, max: 1440}
+  taxi_in_min:            {source: TaxiIn, type: int, min: 0, max: 1440}
+
+  cancelled:              {source: Cancelled, type: bool, required: true}
+  cancellation_code:      {source: CancellationCode, type: string, allowed: [A, B, C, D]}
+  diverted:               {source: Diverted, type: bool, required: true}
+
+  crs_elapsed_min:        {source: CRSElapsedTime, type: int, min: 1, max: 1440}
+  actual_elapsed_min:     {source: ActualElapsedTime, type: int, min: 1, max: 1440}
+  air_time_min:           {source: AirTime, type: int, min: 1, max: 1440}
+  distance_mi:            {source: Distance, type: int, required: true, min: 1, max: 6000}
+
+  # Minutes of arrival delay by cause; reported only for flights 15+ minutes late.
+  carrier_delay_min:      {source: CarrierDelay, type: int, min: 0, max: 4320}
+  weather_delay_min:      {source: WeatherDelay, type: int, min: 0, max: 4320}
+  nas_delay_min:          {source: NASDelay, type: int, min: 0, max: 4320}
+  security_delay_min:     {source: SecurityDelay, type: int, min: 0, max: 4320}
+  late_aircraft_delay_min: {source: LateAircraftDelay, type: int, min: 0, max: 4320}
+
+# Row-level rules across columns. Each `sql` must be TRUE for a valid row (NULL counts as a failure).
+rules:
+  - name: flight_in_source_month
+    description: A monthly file only holds flights from that month.
+    sql: strftime(flight_date, '%Y-%m') = _source_month
+  - name: origin_differs_from_dest
+    sql: origin <> dest
+  - name: cancelled_has_reason
+    description: Every cancellation carries a reason code, and only cancellations do.
+    sql: cancelled = (cancellation_code IS NOT NULL)
+  - name: cancelled_did_not_arrive
+    sql: NOT cancelled OR arr_hhmm IS NULL
+  - name: completed_has_arrival_delay
+    description: A flight that arrived where it was going has an arrival delay.
+    sql: cancelled OR diverted OR arr_delay_min IS NOT NULL
+  - name: delay_causes_add_up
+    description: When BTS reports delay causes, they sum to the minutes the flight arrived late.
+    sql: >-
+      carrier_delay_min IS NULL OR
+      carrier_delay_min + weather_delay_min + nas_delay_min + security_delay_min
+        + late_aircraft_delay_min = arr_delay_late_min
+
+# Thresholds the pipeline enforces per load. A month that breaks them fails loudly.
+expectations:
+  max_quarantine_rate: 0.005   # more than 0.5% of a month quarantined means something upstream changed

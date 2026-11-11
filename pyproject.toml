@@ -1,0 +1,42 @@
+[project]
+name = "open-lakehouse"
+version = "0.1.0"
+description = "A medallion lakehouse on open tools: Apache Iceberg, DuckDB, Dagster and data contracts, on public US flight data."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "pyiceberg[sql-sqlite,pyarrow,pyiceberg-core]>=0.12,<0.13",
+  "duckdb>=2.0,<3",
+  "pyarrow>=18",
+  "dagster>=1.10",
+  "dagster-webserver>=1.10",
+  "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[project.scripts]
+lakehouse = "lakehouse.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lakehouse"]
+
+[tool.dagster]
+module_name = "lakehouse.definitions"
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]

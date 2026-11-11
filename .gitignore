@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+lakehouse_data/
+site/
+.dagster/
+tmp*/
+*.egg-info/
+dist/

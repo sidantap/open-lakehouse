@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>US Flight Reliability · open-lakehouse</title>
+<meta name="description" content="On-time performance of US airlines, built by an open-source medallion lakehouse: Apache Iceberg, DuckDB, Dagster and data contracts on BTS data.">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f5f1; --surface: #fcfcfb; --line: #e4e2db; --grid: #ecebe5;
+  --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #7a786f;
+  --series: #2a78d6; --series-soft: #cde2fb; --focus: #2a78d6;
+  --s1: #cde2fb; --s2: #9ec5f4; --s3: #6da7ec; --s4: #3987e5; --s5: #256abf; --s6: #184f95; --s7: #0d366b;
+  --bad: #d03b3b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --line: #2e2e2b; --grid: #262624;
+    --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8f8d84;
+    --series: #3987e5; --series-soft: #184f95; --focus: #6da7ec;
+    --s1: #104281; --s2: #184f95; --s3: #256abf; --s4: #2a78d6; --s5: #5598e7; --s6: #86b6ef; --s7: #cde2fb;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --line: #2e2e2b; --grid: #262624;
+  --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8f8d84;
+  --series: #3987e5; --series-soft: #184f95; --focus: #6da7ec;
+  --s1: #104281; --s2: #184f95; --s3: #256abf; --s4: #2a78d6; --s5: #5598e7; --s6: #86b6ef; --s7: #cde2fb;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 16px/1.55 var(--sans); }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 40px 16px 64px; }
+header { display: grid; gap: 10px; margin-bottom: 28px; }
+.eyebrow { font: 500 12px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+h1 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; margin: 0; letter-spacing: -.01em; font-weight: 650; }
+h2 { font-size: 19px; margin: 0; font-weight: 620; }
+.lede { color: var(--ink-2); max-width: 64ch; margin: 0; }
+.meta { font: 12px var(--mono); color: var(--ink-3); }
+a { color: var(--series); }
+.grid { display: grid; gap: 16px; align-items: start; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; min-width: 0; }
+.span-12 { grid-column: span 12; } .span-7 { grid-column: span 7; } .span-5 { grid-column: span 5; }
+.span-3 { grid-column: span 3; } .span-6 { grid-column: span 6; }
+@media (max-width: 860px) { .span-7, .span-5, .span-6 { grid-column: span 12; } .span-3 { grid-column: span 6; } }
+.card-head { display: grid; gap: 4px; margin-bottom: 14px; }
+.card-head p { margin: 0; color: var(--ink-2); font-size: 14px; }
+.kpi .label { font-size: 13px; color: var(--ink-2); }
+.kpi .value { font-size: clamp(26px, 3.4vw, 34px); font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.kpi .sub { font-size: 12px; color: var(--ink-3); }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--ink-2); font: 12px var(--sans); font-variant-numeric: tabular-nums; }
+svg .muted { fill: var(--ink-3); }
+svg .strong { fill: var(--ink); font-weight: 600; }
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.axis { stroke: var(--line); stroke-width: 1; }
+.bar { fill: var(--series); }
+.hit { fill: transparent; cursor: default; }
+.hit:hover + .bar, .row:hover .bar { opacity: .82; }
+.line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; }
+.dot { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
+.cell { stroke: var(--surface); stroke-width: 2; }
+.tip { position: fixed; pointer-events: none; z-index: 10; background: var(--ink); color: var(--bg);
+  font-size: 12.5px; line-height: 1.45; padding: 8px 10px; border-radius: 8px; max-width: 260px;
+  opacity: 0; transition: opacity .12s; font-variant-numeric: tabular-nums; }
+.tip.on { opacity: 1; }
+.tip b { font-weight: 600; }
+.legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); margin-top: 10px; flex-wrap: wrap; }
+.ramp { display: flex; } .ramp i { width: 22px; height: 10px; display: block; }
+.ramp i:first-child { border-radius: 3px 0 0 3px; } .ramp i:last-child { border-radius: 0 3px 3px 0; }
+details { margin-top: 12px; font-size: 13px; }
+summary { cursor: pointer; color: var(--ink-2); }
+summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); }
+td.num, th.num { text-align: right; }
+.pill { font: 11px var(--mono); padding: 2px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+.pill.bad { color: var(--bad); border-color: currentColor; }
+pre { margin: 0; font: 12px/1.5 var(--mono); color: var(--ink-2); white-space: pre-wrap; word-break: break-word; }
+.stack { display: grid; gap: 10px; }
+.pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 640px) { .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.stage { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.stage b { display: block; font-size: 14px; }
+.stage span { font-size: 12.5px; color: var(--ink-2); }
+footer { margin-top: 28px; font-size: 13px; color: var(--ink-3); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.theme { font: inherit; background: none; border: 1px solid var(--line); color: var(--ink-2); border-radius: 99px; padding: 3px 10px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="eyebrow">open-lakehouse · gold layer report</span>
+    <h1>How reliable were US airlines?</h1>
+    <p class="lede" id="lede"></p>
+    <span class="meta" id="built"></span>
+  </header>
+
+  <div class="grid">
+    <div class="card kpi span-3"><div class="label">Scheduled flights</div><div class="value" id="k-flights"></div><div class="sub" id="k-flights-sub"></div></div>
+    <div class="card kpi span-3"><div class="label">Arrived on time</div><div class="value" id="k-ontime"></div><div class="sub">within 14 min of schedule</div></div>
+    <div class="card kpi span-3"><div class="label">Cancelled</div><div class="value" id="k-cancel"></div><div class="sub">share of scheduled flights</div></div>
+    <div class="card kpi span-3"><div class="label">Rows quarantined</div><div class="value" id="k-quar"></div><div class="sub" id="k-quar-sub"></div></div>
+
+    <section class="card span-7" aria-labelledby="h-carriers">
+      <div class="card-head"><h2 id="h-carriers">On-time arrival rate by carrier</h2><p>Share of completed flights that arrived less than 15 minutes late.</p></div>
+      <div id="c-carriers"></div>
+      <details><summary>Show as table</summary><div class="scroll" id="t-carriers"></div></details>
+    </section>
+
+    <section class="card span-5" aria-labelledby="h-causes">
+      <div class="card-head"><h2 id="h-causes">Where the delay minutes came from</h2><p>Minutes of arrival delay by cause, for flights 15+ minutes late.</p></div>
+      <div id="c-causes"></div>
+      <details><summary>Show as table</summary><div class="scroll" id="t-causes"></div></details>
+    </section>
+
+    <section class="card span-12" aria-labelledby="h-months">
+      <div class="card-head"><h2 id="h-months">On-time rate by month, all carriers</h2><p>The same definition as above, month by month.</p></div>
+      <div id="c-months"></div>
+      <details><summary>Show as table</summary><div class="scroll" id="t-months"></div></details>
+    </section>
+
+    <section class="card span-12" aria-labelledby="h-heat">
+      <div class="card-head"><h2 id="h-heat">Delays build through the day</h2><p>Share of departures leaving 15+ minutes late, by scheduled hour, at the busiest airports.</p></div>
+      <div class="scroll"><div id="c-heat" style="min-width:640px"></div></div>
+      <div class="legend"><span>Fewer delayed</span><span class="ramp" id="ramp"></span><span>More delayed</span><span id="ramp-range" class="meta"></span></div>
+      <details><summary>Show as table</summary><div class="scroll" id="t-heat"></div></details>
+    </section>
+
+    <section class="card span-12" aria-labelledby="h-routes">
+      <div class="card-head"><h2 id="h-routes">The busiest routes</h2><p>Airport pairs with the most scheduled flights, one direction each.</p></div>
+      <div class="scroll" id="t-routes"></div>
+    </section>
+
+    <section class="card span-6" aria-labelledby="h-pipe">
+      <div class="card-head"><h2 id="h-pipe">How this page was built</h2><p>Every number here comes from the gold layer of an open-source lakehouse.</p></div>
+      <div class="pipeline">
+        <div class="stage"><b>Landing</b><span>Monthly BTS zip, downloaded once, SHA-256 recorded</span></div>
+        <div class="stage"><b>Bronze</b><span>Iceberg, every column as text, one partition per month</span></div>
+        <div class="stage"><b>Silver</b><span id="silver-stage">Typed and validated against a data contract</span></div>
+        <div class="stage"><b>Gold</b><span>Star schema with an SCD Type 2 airport dimension, and marts</span></div>
+      </div>
+      <p class="meta" style="margin:14px 0 0">Apache Iceberg · DuckDB · Dagster · PyIceberg · Python</p>
+    </section>
+
+    <section class="card span-6" aria-labelledby="h-quality">
+      <div class="card-head"><h2 id="h-quality">What the data contract caught</h2><p>Rows that broke a check are kept in quarantine with the reason, never dropped.</p></div>
+      <div class="scroll" id="t-quality"></div>
+      <div class="stack" id="examples" style="margin-top:12px"></div>
+    </section>
+  </div>
+
+  <footer>
+    <span>Data: Bureau of Transportation Statistics, Reporting Carrier On-Time Performance. Built by <a href="https://github.com/sidantap/open-lakehouse">open-lakehouse</a>.</span>
+    <button class="theme" id="theme" type="button">Theme: auto</button>
+  </footer>
+</div>
+<div class="tip" id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const D = /*DATA*/null;
+const NS = "http://www.w3.org/2000/svg";
+const pct = (x, d = 1) => x == null ? "–" : (x * 100).toFixed(d) + "%";
+const num = x => x == null ? "–" : Math.round(x).toLocaleString("en-US");
+const monthName = ym => new Date(ym + "-01T00:00:00").toLocaleString("en-US", { month: "short", year: "numeric" });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function el(name, attrs = {}, parent) {
+  const n = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function text(parent, x, y, s, attrs = {}) { const t = el("text", { x, y, ...attrs }, parent); t.textContent = s; return t; }
+const widthOf = (id, min = 300) => Math.max(min, Math.floor(document.getElementById(id).clientWidth || 640));
+function svg(target, w, h, label) {
+  const s = el("svg", { viewBox: `0 0 ${w} ${h}`, role: "img", "aria-label": label });
+  document.getElementById(target).replaceChildren(s);
+  return s;
+}
+function table(target, head, rows, numeric = []) {
+  const th = head.map((h, i) => `<th class="${numeric.includes(i) ? "num" : ""}">${esc(h)}</th>`).join("");
+  const tr = rows.map(r => "<tr>" + r.map((c, i) => `<td class="${numeric.includes(i) ? "num" : ""}">${c}</td>`).join("") + "</tr>").join("");
+  document.getElementById(target).innerHTML = `<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+}
+
+// tooltip
+const tip = document.getElementById("tip");
+function hover(node, html) {
+  const show = e => {
+    tip.innerHTML = html; tip.classList.add("on");
+    const r = tip.getBoundingClientRect();
+    let x = (e.clientX ?? 0) + 14, y = (e.clientY ?? 0) + 14;
+    if (e.type === "focus") { const b = node.getBoundingClientRect(); x = b.right + 8; y = b.top; }
+    if (x + r.width > innerWidth - 8) x = innerWidth - r.width - 8;
+    if (y + r.height > innerHeight - 8) y = (e.clientY ?? y) - r.height - 14;
+    tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+  };
+  node.addEventListener("pointermove", show); node.addEventListener("focus", show);
+  node.addEventListener("pointerleave", () => tip.classList.remove("on"));
+  node.addEventListener("blur", () => tip.classList.remove("on"));
+}
+
+// a horizontal bar: 4px rounded data end, square at the baseline
+function hbar(parent, x, y, w, h) {
+  const r = Math.min(4, w / 2, h / 2);
+  const d = w <= 0 ? "" : `M${x},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x} Z`;
+  return el("path", { d, class: "bar" }, parent);
+}
+function vbar(parent, x, y, w, h) {  // top-rounded, anchored at the bottom
+  const r = Math.min(4, w / 2, h);
+  const d = `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`;
+  return el("path", { d, class: "bar" }, parent);
+}
+
+function header() {
+  const t = D.totals;
+  document.getElementById("lede").textContent =
+    `${num(t.flights)} scheduled flights by ${t.carriers} US carriers, ${monthName(t.first_month)} to ${monthName(t.last_month)}. ` +
+    `Loaded month by month into Apache Iceberg tables, validated against a data contract, and modeled into a star schema.`;
+  document.getElementById("built").textContent = `Built ${D.built} from gold.mart_* · contract ${D.contract.name} v${D.contract.version}`;
+  document.getElementById("k-flights").textContent = num(t.flights);
+  document.getElementById("k-flights-sub").textContent = `${D.months.length} months, ${t.carriers} carriers`;
+  document.getElementById("k-ontime").textContent = pct(t.on_time_rate);
+  document.getElementById("k-cancel").textContent = pct(t.cancel_rate);
+  const q = D.quality.reduce((a, r) => a + r.quarantined, 0);
+  document.getElementById("k-quar").textContent = num(q);
+  document.getElementById("k-quar-sub").textContent = `of ${num(D.quality.reduce((a, r) => a + r.bronze, 0))} rows, ${D.contract.checks} checks`;
+  document.getElementById("silver-stage").textContent = `Typed and checked against a ${D.contract.checks}-check data contract`;
+}
+
+function carriers() {
+  const rows = D.carriers, W = widthOf("c-carriers"), rowH = 26, top = 4, left = W < 480 ? 124 : 168, right = 52;
+  const H = top + rows.length * rowH + 22;
+  const s = svg("c-carriers", W, H, "Bar chart of on-time arrival rate by carrier");
+  const min = 0.6, max = 0.95, sx = v => left + (Math.max(v, min) - min) / (max - min) * (W - left - right);
+  const tick = W < 480 ? 0.1 : 0.05;
+  for (let v = 0.6; v <= 0.951; v += tick) {
+    el("line", { x1: sx(v), x2: sx(v), y1: top, y2: H - 20, class: "gridline" }, s);
+    text(s, sx(v), H - 4, pct(v, 0), { "text-anchor": "middle", class: "muted" });
+  }
+  rows.forEach((r, i) => {
+    const y = top + i * rowH, g = el("g", { class: "row", tabindex: 0 }, s);
+    text(g, left - 10, y + 16, r.carrier_name, { "text-anchor": "end" });
+    hbar(g, left, y + 5, sx(r.on_time_rate) - left, rowH - 10);
+    text(g, sx(r.on_time_rate) + 6, y + 16, pct(r.on_time_rate), { class: "strong" });
+    el("rect", { x: 0, y, width: W, height: rowH, class: "hit" }, g);
+    hover(g, `<b>${esc(r.carrier_name)}</b> (${r.carrier_code})<br>On time: ${pct(r.on_time_rate)}<br>Cancelled: ${pct(r.cancel_rate)}<br>${num(r.flights)} flights`);
+  });
+  table("t-carriers", ["Carrier", "Code", "Flights", "On time", "Cancelled"],
+    rows.map(r => [esc(r.carrier_name), r.carrier_code, num(r.flights), pct(r.on_time_rate), pct(r.cancel_rate)]), [2, 3, 4]);
+}
+
+function causes() {
+  const rows = D.causes, total = rows.reduce((a, r) => a + r.minutes, 0);
+  const W = widthOf("c-causes"), rowH = 44, left = 0, right = 46, H = rows.length * rowH;
+  const s = svg("c-causes", W, H, "Bar chart of arrival delay minutes by cause");
+  const max = Math.max(...rows.map(r => r.minutes)), sx = v => v / max * (W - left - right);
+  rows.forEach((r, i) => {
+    const y = i * rowH, g = el("g", { class: "row", tabindex: 0 }, s);
+    text(g, 0, y + 14, r.cause);
+    hbar(g, 0, y + 21, Math.max(2, sx(r.minutes)), 12);
+    text(g, sx(r.minutes) + 6, y + 31, pct(r.minutes / total, 0), { class: "strong" });
+    el("rect", { x: 0, y, width: W, height: rowH, class: "hit" }, g);
+    hover(g, `<b>${esc(r.cause)}</b><br>${num(r.minutes)} minutes<br>${pct(r.minutes / total)} of all delay minutes`);
+  });
+  table("t-causes", ["Cause", "Minutes", "Share"], rows.map(r => [esc(r.cause), num(r.minutes), pct(r.minutes / total)]), [1, 2]);
+}
+
+function months() {
+  const rows = D.months, W = widthOf("c-months"), H = 220, l = 44, r = 24, t = 20, b = 28;
+  const s = svg("c-months", W, H, "Line chart of on-time rate by month");
+  const vals = rows.map(d => d.on_time_rate);
+  const lo = Math.floor((Math.min(...vals) - 0.02) * 20) / 20, hi = Math.ceil((Math.max(...vals) + 0.02) * 20) / 20;
+  const sx = i => rows.length === 1 ? (l + W - r) / 2 : l + i * (W - l - r) / (rows.length - 1);
+  const sy = v => t + (hi - v) / (hi - lo) * (H - t - b);
+  for (let v = lo; v <= hi + 1e-9; v += 0.05) {
+    el("line", { x1: l, x2: W - r, y1: sy(v), y2: sy(v), class: "gridline" }, s);
+    text(s, l - 8, sy(v) + 4, pct(v, 0), { "text-anchor": "end", class: "muted" });
+  }
+  el("path", { d: rows.map((d, i) => `${i ? "L" : "M"}${sx(i)},${sy(d.on_time_rate)}`).join(" "), class: "line" }, s);
+  const best = vals.indexOf(Math.max(...vals)), worst = vals.indexOf(Math.min(...vals));
+  rows.forEach((d, i) => {
+    const every = Math.ceil(rows.length / Math.max(2, Math.floor((W - l) / 80)));
+    if ((i % every === 0 && rows.length - 1 - i >= every) || i === rows.length - 1)
+      text(s, sx(i), H - 6, monthName(d.year_month), { "text-anchor": i === 0 ? "start" : i === rows.length - 1 ? "end" : "middle", class: "muted" });
+    el("circle", { cx: sx(i), cy: sy(d.on_time_rate), r: 5, class: "dot" }, s);
+    if (i === best || i === worst) text(s, sx(i), sy(d.on_time_rate) - 12, pct(d.on_time_rate), { "text-anchor": "middle", class: "strong" });
+  });
+  // crosshair hover: one wide band per month
+  const cross = el("line", { y1: t, y2: H - b, class: "axis", visibility: "hidden" }, s);
+  rows.forEach((d, i) => {
+    const w = rows.length === 1 ? W - l - r : (W - l - r) / (rows.length - 1);
+    const band = el("rect", { x: sx(i) - w / 2, y: t, width: w, height: H - t - b, class: "hit", tabindex: 0 }, s);
+    hover(band, `<b>${monthName(d.year_month)}</b><br>On time: ${pct(d.on_time_rate)}<br>Cancelled: ${pct(d.cancel_rate)}<br>${num(d.flights)} flights`);
+    const on = () => { cross.setAttribute("x1", sx(i)); cross.setAttribute("x2", sx(i)); cross.setAttribute("visibility", "visible"); };
+    band.addEventListener("pointerenter", on); band.addEventListener("focus", on);
+    band.addEventListener("pointerleave", () => cross.setAttribute("visibility", "hidden"));
+  });
+  table("t-months", ["Month", "Flights", "On time", "Cancelled"],
+    rows.map(d => [monthName(d.year_month), num(d.flights), pct(d.on_time_rate), pct(d.cancel_rate)]), [1, 2, 3]);
+}
+
+function heat() {
+  const hours = [...new Set(D.heat.map(d => d.hour))].sort((a, b) => a - b);
+  const ap = D.airports, W = widthOf("c-heat", 640), l = 54, t = 4, cw = (W - l) / hours.length, ch = 26, H = t + ap.length * ch + 24;
+  const s = svg("c-heat", W, H, "Heatmap of the share of delayed departures by airport and hour");
+  const vals = D.heat.map(d => d.dep_delayed_rate).filter(v => v != null);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const steps = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7"];
+  const color = v => `var(${steps[Math.min(steps.length - 1, Math.floor((v - lo) / (hi - lo + 1e-9) * steps.length))]})`;
+  const byKey = new Map(D.heat.map(d => [d.origin + "|" + d.hour, d]));
+  ap.forEach((a, i) => {
+    const y = t + i * ch;
+    text(s, l - 8, y + ch / 2 + 4, a, { "text-anchor": "end", class: "strong" });
+    hours.forEach((h, j) => {
+      const d = byKey.get(a + "|" + h); if (!d || d.dep_delayed_rate == null) return;
+      const c = el("rect", { x: l + j * cw, y, width: cw, height: ch, rx: 3, fill: color(d.dep_delayed_rate), class: "cell", tabindex: 0 }, s);
+      hover(c, `<b>${esc(d.city)} (${a})</b><br>${String(h).padStart(2, "0")}:00–${String(h).padStart(2, "0")}:59 departures<br>${pct(d.dep_delayed_rate)} left 15+ min late<br>${num(d.scheduled)} scheduled`);
+    });
+  });
+  hours.forEach((h, j) => { if (h % 2 === 1) text(s, l + j * cw + cw / 2, H - 6, `${String(h).padStart(2, "0")}:00`, { "text-anchor": "middle", class: "muted" }); });
+  document.getElementById("ramp").innerHTML = steps.map(v => `<i style="background:var(${v})"></i>`).join("");
+  document.getElementById("ramp-range").textContent = `${pct(lo, 0)} – ${pct(hi, 0)}`;
+  table("t-heat", ["Airport", ...hours.map(h => String(h).padStart(2, "0"))],
+    ap.map(a => [a, ...hours.map(h => { const d = byKey.get(a + "|" + h); return d ? pct(d.dep_delayed_rate, 0) : "–"; })]),
+    hours.map((_, i) => i + 1));
+}
+
+function routes() {
+  table("t-routes", ["Route", "Cities", "Flights", "On time", "Cancelled"],
+    D.routes.map(r => [`<b>${r.origin} → ${r.dest}</b>`, `${esc(r.origin_city)} → ${esc(r.dest_city)}`, num(r.flights), pct(r.on_time_rate), pct(r.cancel_rate)]),
+    [2, 3, 4]);
+}
+
+function quality() {
+  table("t-quality", ["Month", "Bronze rows", "Quarantined", "Share"],
+    D.quality.map(r => [monthName(r.month), num(r.bronze), num(r.quarantined), r.quarantined ? pct(r.quarantined / r.bronze, 4) : "0%"]), [1, 2, 3]);
+  const box = document.getElementById("examples");
+  box.innerHTML = D.examples.map(e => {
+    const r = e.raw_record;
+    const pick = ["FlightDate", "Reporting_Airline", "Flight_Number_Reporting_Airline", "Origin", "Dest", "CRSDepTime", "CRSArrTime", "CRSElapsedTime", "Distance", "Cancelled"]
+      .filter(k => k in r).map(k => `${k}: ${r[k] ?? "null"}`).join("\n");
+    return `<div class="stage"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${e.violations.map(v => `<span class="pill bad">${esc(v)}</span>`).join("")}<span class="pill">${monthName(e.month)} · row ${num(e.row_number)}</span></div><pre>${esc(pick)}</pre></div>`;
+  }).join("");
+}
+
+// theme switch: auto -> light -> dark
+const themes = ["auto", "light", "dark"], btn = document.getElementById("theme");
+let theme = "auto";
+try { theme = localStorage.getItem("ol-theme") || "auto"; } catch (e) {}
+function applyTheme() {
+  if (theme === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", theme);
+  btn.textContent = "Theme: " + theme;
+}
+btn.addEventListener("click", () => {
+  theme = themes[(themes.indexOf(theme) + 1) % 3];
+  try { localStorage.setItem("ol-theme", theme); } catch (e) {}
+  applyTheme();
+});
+applyTheme();
+
+header(); routes(); quality();
+function charts() { carriers(); causes(); months(); heat(); }
+charts();
+let lastW = innerWidth, pending;
+addEventListener("resize", () => {
+  if (innerWidth === lastW) return;
+  lastW = innerWidth; clearTimeout(pending); pending = setTimeout(charts, 120);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+carrier_code,carrier_name,carrier_group
+9E,Endeavor Air,Regional
+AA,American Airlines,Network
+AS,Alaska Airlines,Network
+B6,JetBlue Airways,Low-cost
+DL,Delta Air Lines,Network
+F9,Frontier Airlines,Ultra-low-cost
+G4,Allegiant Air,Ultra-low-cost
+HA,Hawaiian Airlines,Network
+MQ,Envoy Air,Regional
+NK,Spirit Airlines,Ultra-low-cost
+OH,PSA Airlines,Regional
+OO,SkyWest Airlines,Regional
+QX,Horizon Air,Regional
+UA,United Airlines,Network
+WN,Southwest Airlines,Low-cost
+YV,Mesa Airlines,Regional
+YX,Republic Airways,Regional
